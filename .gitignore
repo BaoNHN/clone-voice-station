@@ -1,0 +1,8 @@
+/voice_samples/
+/voice_storage/
+/voice_station.db
+session_secret.txt
+.idea/
+__pycache__/
+*.pyc
+*.pyo

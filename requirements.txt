@@ -1,0 +1,19 @@
+# Backend
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+jinja2>=3.1.4
+itsdangerous>=2.1.2
+
+# Voice feature — TTS (RVC voice-cloning + F5-TTS baseline run remotely on Colab,
+# see colab/voice_server.ipynb)
+edge-tts>=6.1.0
+requests>=2.31.0
+
+# Manager dashboard "realism test" (engine/realism_engine.py) — speaker-embedding
+# cosine similarity between a synthesized clip and the user's own uploaded samples.
+# Pulls in torch; only imported lazily on first use, not at app.py startup.
+# Decoding non-.wav original samples (.mp3/.webm/.ogg/.m4a) needs an `ffmpeg`
+# binary on PATH (used by librosa, a resemblyzer dependency).
+resemblyzer>=0.1.4
+soundfile>=0.12.1

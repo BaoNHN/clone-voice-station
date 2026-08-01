@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>clone-voice-station — Quản trị</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: #16161d; color: #e8e8ec; padding: 24px 32px 60px;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+  header h1 { font-size: 19px; margin: 0; }
+  header .who { font-size: 12.5px; color: #9a9aa8; }
+  header .actions button {
+    background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #cfcfda;
+    padding: 6px 12px; border-radius: 7px; font-size: 12.5px; cursor: pointer; margin-left: 8px;
+  }
+  header .actions button:hover { border-color: #6c8cff; color: #fff; }
+
+  .card {
+    background: #1f1f29; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
+    padding: 20px 22px; margin-bottom: 20px;
+  }
+  .card h2 { font-size: 14.5px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+  .card .desc { font-size: 12px; color: #9a9aa8; margin: 0 0 16px; }
+
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 11.5px; color: #9a9aa8; }
+  .field input {
+    padding: 8px 10px; border-radius: 7px; font-size: 13px; min-width: 140px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+  }
+  .field input:focus { outline: none; border-color: #6c8cff; }
+  .field.wide input { min-width: 320px; }
+
+  button.btn {
+    padding: 8px 14px; border: none; border-radius: 7px; font-size: 12.5px; font-weight: 600;
+    background: #6c8cff; color: #0d0d12; cursor: pointer;
+  }
+  button.btn:hover { background: #86a2ff; }
+  button.btn.danger { background: #d94c4c; color: #fff; }
+  button.btn.danger:hover { background: #e86868; }
+  button.btn.ghost { background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #cfcfda; }
+  button.btn.ghost:hover { border-color: #6c8cff; color: #fff; }
+  button.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 10px; border-radius: 999px; }
+  .pill.on  { background: rgba(80,200,120,0.15); color: #6fe08a; }
+  .pill.off { background: rgba(217,76,76,0.15); color: #ff8a8a; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.8px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  th { color: #9a9aa8; font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; }
+  td.mono { font-family: "SF Mono", Consolas, monospace; font-size: 11.5px; color: #b6b6c2; }
+  .status { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; }
+  .status.ready      { background: rgba(80,200,120,0.15); color: #6fe08a; }
+  .status.training    { background: rgba(255,196,0,0.15); color: #ffd25a; }
+  .status.new,
+  .status.collecting  { background: rgba(150,150,170,0.15); color: #b6b6c2; }
+  .status.failed      { background: rgba(217,76,76,0.15); color: #ff8a8a; }
+
+  .toast {
+    position: fixed; bottom: 20px; right: 20px; padding: 12px 16px; border-radius: 9px;
+    background: #2a2a37; border: 1px solid rgba(255,255,255,0.12); font-size: 13px;
+    display: none; max-width: 360px;
+  }
+  .toast.error { border-color: rgba(217,76,76,0.4); color: #ff8a8a; }
+  .toast.ok    { border-color: rgba(80,200,120,0.4); color: #6fe08a; }
+
+  .key-reveal { font-family: "SF Mono", Consolas, monospace; font-size: 11.5px; word-break: break-all; }
+  .empty { color: #77778a; font-size: 12.5px; padding: 10px 0; }
+  .advanced-toggle { font-size: 12px; color: #6c8cff; cursor: pointer; margin-top: 6px; display: inline-block; }
+  .advanced { display: none; margin-top: 10px; }
+  .advanced.open { display: block; }
+
+  /* ══ Realism test modal ══ */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+    align-items: flex-start; justify-content: center; z-index: 100; padding: 40px 16px;
+    overflow-y: auto;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: #1f1f29; border: 1px solid rgba(255,255,255,0.1); border-radius: 14px;
+    padding: 24px 26px; width: 100%; max-width: 620px;
+  }
+  .modal h3 { margin: 0 0 4px; font-size: 16px; }
+  .modal .modal-sub { font-size: 12px; color: #9a9aa8; margin: 0 0 16px; }
+  .modal textarea {
+    width: 100%; min-height: 64px; padding: 9px 10px; border-radius: 8px; font-size: 13px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+    font-family: inherit; resize: vertical;
+  }
+  .modal textarea:focus { outline: none; border-color: #6c8cff; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  .modal-close { position: absolute; }
+
+  .score-block { margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); }
+  .score-badge {
+    display: inline-flex; align-items: baseline; gap: 8px; font-size: 26px; font-weight: 700;
+  }
+  .score-badge .verdict { font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+  .score-bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); margin: 10px 0 4px; overflow: hidden; }
+  .score-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #d94c4c, #ffd25a, #6fe08a); }
+  .score-hint { font-size: 11.5px; color: #77778a; }
+
+  .synth-player { margin-top: 14px; }
+  .synth-player label, .samples-list-label { font-size: 11.5px; color: #9a9aa8; display: block; margin-bottom: 6px; }
+  audio { width: 100%; height: 34px; }
+
+  .sample-row {
+    display: flex; align-items: center; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .sample-row:last-child { border-bottom: none; }
+  .sample-row audio { flex: 1; }
+  .sample-row .pair-score { font-size: 12.5px; font-weight: 600; min-width: 46px; text-align: right; }
+  .samples-list { margin-top: 18px; }
+
+  .spinner-inline {
+    display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,0.25);
+    border-top-color: #6c8cff; border-radius: 50%; animation: spin .7s linear infinite; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🎙 clone-voice-station</h1>
+    <div class="who">Đăng nhập với <strong>{{ manager }}</strong></div>
+  </div>
+  <div class="actions">
+    <button onclick="openChangePassword()">Đổi mật khẩu</button>
+    <button onclick="logout()">Đăng xuất</button>
+  </div>
+</header>
+
+<!-- ══ RVC Connection & Tuning ══ -->
+<div class="card">
+  <h2>🔌 Kết nối RVC (Colab) <span id="rvcPill" class="pill off"><span class="dot"></span>—</span></h2>
+  <p class="desc">URL tunnel Colab (đổi mỗi lần notebook khởi động lại) và các tham số chỉnh giọng khi convert.</p>
+
+  <div class="row">
+    <div class="field wide">
+      <label>Endpoint URL</label>
+      <input type="text" id="rvcEndpoint" placeholder="https://xxxx.ngrok.io"/>
+    </div>
+    <button class="btn" onclick="saveRvcEndpoint()">Lưu endpoint</button>
+    <button class="btn ghost" onclick="loadRvcConfig()">↺ Kiểm tra lại</button>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label>Pitch</label>
+      <input type="number" id="rvcPitch" step="1"/>
+    </div>
+    <div class="field">
+      <label>Index rate</label>
+      <input type="number" id="rvcIndexRate" step="0.05" min="0" max="1"/>
+    </div>
+    <button class="btn" onclick="saveRvcTuning()">Lưu tham số</button>
+  </div>
+
+  <span class="advanced-toggle" onclick="toggleAdvanced()">⚙️ Tuỳ chỉnh timeout nâng cao</span>
+  <div class="advanced" id="advancedBlock">
+    <div class="row">
+      <div class="field"><label>Timeout convert (s)</label><input type="number" id="tConvert"/></div>
+      <div class="field"><label>Timeout health/status (s)</label><input type="number" id="tShort"/></div>
+      <div class="field"><label>Timeout download model (s)</label><input type="number" id="tDownload"/></div>
+      <div class="field"><label>Timeout F5-TTS (s)</label><input type="number" id="tF5tts"/></div>
+      <button class="btn" onclick="saveRvcTimeouts()">Lưu timeout</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Client Apps ══ -->
+<div class="card">
+  <h2>🧩 Client Apps</h2>
+  <p class="desc">Các ứng dụng (đối tác/công ty) được cấp API key để gọi vào dịch vụ giọng nói này.</p>
+
+  <div class="row">
+    <div class="field">
+      <label>Tên client mới</label>
+      <input type="text" id="newClientName" placeholder="vd: acme-corp"/>
+    </div>
+    <button class="btn" onclick="createClient()">+ Tạo client</button>
+  </div>
+
+  <table>
+    <thead><tr><th>Tên</th><th>API Key</th><th>Webhook (thông báo xoá/vô hiệu hoá)</th><th>Tạo lúc</th><th></th></tr></thead>
+    <tbody id="clientsBody"></tbody>
+  </table>
+  <div class="empty" id="clientsEmpty" style="display:none;">Chưa có client nào.</div>
+</div>
+
+<!-- ══ All Voice Profiles ══ -->
+<div class="card">
+  <h2>🗂️ Toàn bộ giọng nói (mọi client)</h2>
+  <p class="desc">Mỗi giọng nhân bản đã tạo, bất kể thuộc client nào — huấn luyện lại / vô hiệu hoá / xoá trực tiếp.</p>
+
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Tên</th><th>Client</th><th>Trạng thái</th><th>Mẫu</th><th>Speaker ID</th><th></th></tr>
+    </thead>
+    <tbody id="profilesBody"></tbody>
+  </table>
+  <div class="empty" id="profilesEmpty" style="display:none;">Chưa có giọng nói nào được tạo.</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ══ Realism test modal ══ -->
+<div class="modal-overlay" id="realismOverlay" onclick="if(event.target===this) closeRealismModal()">
+  <div class="modal">
+    <h3 id="realismTitle">🎯 Test độ giống — </h3>
+    <p class="modal-sub">Đọc một câu bằng giọng nhân bản, rồi so sánh độ giống (speaker-embedding cosine similarity) với các mẫu ghi âm gốc của người dùng.</p>
+
+    <label class="samples-list-label" for="realismText">Câu thử nghiệm</label>
+    <textarea id="realismText"></textarea>
+
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeRealismModal()">Đóng</button>
+      <button class="btn" id="realismRunBtn" onclick="runRealismTest()">▶ Chạy kiểm tra</button>
+    </div>
+
+    <div id="realismResult"></div>
+
+    <div class="samples-list">
+      <span class="samples-list-label">Mẫu ghi âm gốc của người dùng</span>
+      <div id="realismSamplesBody"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const MIN_SAMPLES = {{ min_samples }};
+
+function toast(msg, kind) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + (kind || 'ok');
+  t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.style.display = 'none', 4000);
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts || {});
+  if (res.status === 401) { window.location.href = '/login'; throw new Error('unauthorized'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+  return data;
+}
+
+function logout() {
+  fetch('/logout', { method: 'POST' }).then(() => window.location.href = '/login');
+}
+
+function toggleAdvanced() {
+  document.getElementById('advancedBlock').classList.toggle('open');
+}
+
+function openChangePassword() {
+  const pw = prompt('Mật khẩu mới (tối thiểu 8 ký tự):');
+  if (!pw) return;
+  api('/manager/change_password', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_password: pw }),
+  }).then(() => toast('Đã đổi mật khẩu.')).catch(e => toast(e.message, 'error'));
+}
+
+// ── RVC config ──────────────────────────────────────────────────────────────
+async function loadRvcConfig() {
+  try {
+    const cfg = await api('/manager/rvc_config');
+    document.getElementById('rvcEndpoint').value  = cfg.endpoint || '';
+    document.getElementById('rvcPitch').value      = cfg.pitch;
+    document.getElementById('rvcIndexRate').value  = cfg.index_rate;
+    document.getElementById('tConvert').value      = cfg.timeout_convert;
+    document.getElementById('tShort').value        = cfg.timeout_short;
+    document.getElementById('tDownload').value     = cfg.timeout_download;
+    document.getElementById('tF5tts').value        = cfg.timeout_f5tts;
+    const pill = document.getElementById('rvcPill');
+    pill.className = 'pill ' + (cfg.available ? 'on' : 'off');
+    pill.innerHTML = '<span class="dot"></span>' + (cfg.available ? 'Online' : 'Offline');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveRvcEndpoint() {
+  try {
+    await api('/manager/rvc_config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: document.getElementById('rvcEndpoint').value.trim() }),
+    });
+    toast('Đã lưu endpoint.');
+    loadRvcConfig();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveRvcTuning() {
+  try {
+    await api('/manager/rvc_config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pitch: parseInt(document.getElementById('rvcPitch').value, 10),
+        index_rate: parseFloat(document.getElementById('rvcIndexRate').value),
+      }),
+    });
+    toast('Đã lưu tham số.');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveRvcTimeouts() {
+  try {
+    await api('/manager/rvc_config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        timeout_convert:  parseInt(document.getElementById('tConvert').value, 10),
+        timeout_short:    parseInt(document.getElementById('tShort').value, 10),
+        timeout_download: parseInt(document.getElementById('tDownload').value, 10),
+        timeout_f5tts:    parseInt(document.getElementById('tF5tts').value, 10),
+      }),
+    });
+    toast('Đã lưu timeout.');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Clients ──────────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  return (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function loadClients() {
+  try {
+    const clients = await api('/manager/clients');
+    const body = document.getElementById('clientsBody');
+    document.getElementById('clientsEmpty').style.display = clients.length ? 'none' : 'block';
+    body.innerHTML = clients.map(c => `
+      <tr>
+        <td>${escapeHtml(c.name)}</td>
+        <td class="mono key-reveal">${escapeHtml(c.api_key)}</td>
+        <td class="mono">${c.webhook_url
+          ? escapeHtml(c.webhook_url)
+          : '<span style="color:#77778a;">— chưa đăng ký —</span>'}
+          <button class="btn ghost" style="margin-left:6px;" onclick="setClientWebhook(${c.id}, '${escapeHtml(c.webhook_url || '')}')">Đặt webhook</button>
+        </td>
+        <td>${new Date(c.created_at * 1000).toLocaleString('vi-VN')}</td>
+        <td><button class="btn danger" onclick="removeClient(${c.id}, '${escapeHtml(c.name)}')">Xoá</button></td>
+      </tr>
+    `).join('');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function createClient() {
+  const nameEl = document.getElementById('newClientName');
+  const name = nameEl.value.trim();
+  if (!name) return;
+  try {
+    const result = await api('/manager/clients', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    nameEl.value = '';
+    toast(`Đã tạo client "${result.name}". API key: ${result.api_key}`);
+    loadClients();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function removeClient(id, name) {
+  if (!confirm(`Xoá client "${name}"? Chỉ xoá được nếu client này chưa có giọng nói nào.`)) return;
+  try {
+    await api(`/manager/clients/${id}`, { method: 'DELETE' });
+    toast('Đã xoá client.');
+    loadClients();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function setClientWebhook(id, current) {
+  const url = prompt('Webhook URL để nhận thông báo xoá/vô hiệu hoá giọng nói (để trống để xoá):', current || '');
+  if (url === null) return;
+  try {
+    await api(`/manager/clients/${id}/webhook`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhook_url: url.trim() }),
+    });
+    toast('Đã lưu webhook.');
+    loadClients();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Voice profiles ───────────────────────────────────────────────────────────
+function statusLabel(s) {
+  return { new: 'Mới', collecting: 'Đang thu âm', training: 'Đang huấn luyện', ready: 'Sẵn sàng', failed: 'Lỗi' }[s] || s;
+}
+
+async function loadProfiles() {
+  try {
+    const profiles = await api('/manager/profiles');
+    const body = document.getElementById('profilesBody');
+    document.getElementById('profilesEmpty').style.display = profiles.length ? 'none' : 'block';
+    body.innerHTML = profiles.map(p => {
+      const canRetrain = p.sample_count >= MIN_SAMPLES && p.status !== 'training';
+      return `
+      <tr>
+        <td>${p.id}</td>
+        <td>${escapeHtml(p.name)}</td>
+        <td>${escapeHtml(p.client_name)}</td>
+        <td><span class="status ${p.status}">${statusLabel(p.status)}</span>${p.error_message ? ' — ' + escapeHtml(p.error_message) : ''}</td>
+        <td>${p.sample_count}</td>
+        <td class="mono">${escapeHtml(p.speaker_id || '—')}</td>
+        <td>
+          <button class="btn ghost" ${canRetrain ? '' : 'disabled'} onclick="retrainProfile(${p.id})">Huấn luyện lại</button>
+          <button class="btn ghost" ${p.status === 'ready' ? '' : 'disabled'} onclick="openRealismModal(${p.id}, '${escapeHtml(p.name)}')">🎯 Test độ giống</button>
+          <button class="btn ghost" onclick="disableProfile(${p.id})">Vô hiệu hoá</button>
+          <button class="btn danger" onclick="removeProfile(${p.id}, '${escapeHtml(p.name)}')">Xoá</button>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function retrainProfile(id) {
+  try { await api(`/manager/profiles/${id}/retrain`, { method: 'POST' }); toast('Đã gửi yêu cầu huấn luyện lại.'); loadProfiles(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+
+async function disableProfile(id) {
+  if (!confirm('Vô hiệu hoá giọng nói này? Người dùng sẽ được thông báo (nếu client đã đăng ký webhook).')) return;
+  const reason = prompt('Lý do (tuỳ chọn, sẽ gửi kèm thông báo cho người dùng):', '') || '';
+  try {
+    await api(`/manager/profiles/${id}/disable`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reason.trim() }),
+    });
+    toast('Đã vô hiệu hoá và gửi thông báo.');
+    loadProfiles();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function removeProfile(id, name) {
+  if (!confirm(`Xoá vĩnh viễn giọng nói "${name}"? Người dùng sẽ được thông báo (nếu client đã đăng ký webhook).`)) return;
+  const reason = prompt('Lý do (tuỳ chọn, sẽ gửi kèm thông báo cho người dùng):', '') || '';
+  try {
+    await api(`/manager/profiles/${id}`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reason.trim() }),
+    });
+    toast('Đã xoá và gửi thông báo.');
+    loadProfiles();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Realism test ─────────────────────────────────────────────────────────────
+let _realismProfileId = null;
+const REALISM_DEFAULT_TEXT = "Xin chào, đây là đoạn văn bản thử nghiệm để kiểm tra độ giống của giọng nói nhân bản so với giọng nói gốc đã ghi âm.";
+
+function openRealismModal(id, name) {
+  _realismProfileId = id;
+  document.getElementById('realismTitle').textContent = `🎯 Test độ giống — ${name}`;
+  document.getElementById('realismText').value = REALISM_DEFAULT_TEXT;
+  document.getElementById('realismResult').innerHTML = '';
+  document.getElementById('realismSamplesBody').innerHTML = '<div class="empty">Đang tải...</div>';
+  document.getElementById('realismOverlay').classList.add('open');
+  loadRealismSamples(id);
+}
+
+function closeRealismModal() {
+  document.getElementById('realismOverlay').classList.remove('open');
+  document.querySelectorAll('#realismOverlay audio').forEach(a => a.pause());
+  _realismProfileId = null;
+}
+
+async function loadRealismSamples(id) {
+  try {
+    const samples = await api(`/manager/profiles/${id}/samples`);
+    const body = document.getElementById('realismSamplesBody');
+    if (!samples.length) {
+      body.innerHTML = '<div class="empty">Chưa có mẫu ghi âm nào.</div>';
+      return;
+    }
+    body.innerHTML = samples.map(s => `
+      <div class="sample-row" data-sample-id="${s.id}">
+        <span style="min-width:70px;font-size:12px;color:#9a9aa8;">${escapeHtml(s.script_id)}</span>
+        <audio controls preload="none" src="/manager/profiles/${id}/samples/${s.id}/audio"></audio>
+        <span class="pair-score" data-role="pair-score">—</span>
+      </div>
+    `).join('');
+  } catch (e) {
+    document.getElementById('realismSamplesBody').innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function verdictColor(scorePct) {
+  if (scorePct >= 85) return '#6fe08a';
+  if (scorePct >= 70) return '#ffd25a';
+  if (scorePct >= 50) return '#ffab5a';
+  return '#ff8a8a';
+}
+
+async function runRealismTest() {
+  if (!_realismProfileId) return;
+  const id = _realismProfileId;
+  const text = document.getElementById('realismText').value.trim();
+  const btn = document.getElementById('realismRunBtn');
+  const resultEl = document.getElementById('realismResult');
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-inline"></span>Đang xử lý…';
+  resultEl.innerHTML = '';
+
+  try {
+    const r = await api(`/manager/profiles/${id}/realism_test`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+
+    const color = verdictColor(r.score_pct);
+    resultEl.innerHTML = `
+      <div class="score-block">
+        <div class="score-badge">
+          ${r.score_pct.toFixed(1)}%
+          <span class="verdict" style="background:${color}26;color:${color};">${escapeHtml(r.verdict)}</span>
+        </div>
+        <div class="score-bar"><div class="score-bar-fill" style="width:${Math.min(100, r.score_pct)}%;"></div></div>
+        <div class="score-hint">Độ giống giọng nói (speaker-embedding cosine similarity) so với toàn bộ mẫu gốc.</div>
+        <div class="synth-player">
+          <label>Bản ghi thử nghiệm (giọng nhân bản)</label>
+          <audio controls src="data:${r.synthesized_mime};base64,${r.synthesized_audio_b64}"></audio>
+        </div>
+      </div>
+    `;
+
+    (r.sample_scores || []).forEach(s => {
+      const row = document.querySelector(`#realismSamplesBody .sample-row[data-sample-id="${s.sample_id}"] [data-role="pair-score"]`);
+      if (!row) return;
+      if (s.score_pct == null) {
+        row.textContent = 'lỗi';
+        row.style.color = '#ff8a8a';
+      } else {
+        row.textContent = s.score_pct.toFixed(1) + '%';
+        row.style.color = verdictColor(s.score_pct);
+      }
+    });
+  } catch (e) {
+    resultEl.innerHTML = `<div class="score-block"><div class="empty" style="color:#ff8a8a;">${escapeHtml(e.message)}</div></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '▶ Chạy kiểm tra';
+  }
+}
+
+loadRvcConfig();
+loadClients();
+loadProfiles();
+</script>
+</body>
+</html>
