@@ -96,6 +96,8 @@ async def run_realism_test(profile: dict, samples: list, text: str = "") -> dict
     Raises RuntimeError (Vietnamese message, safe to show the manager directly)
     on any condition that makes scoring impossible.
     """
+    import asyncio
+
     import numpy as np
     from voice import tts, rvc_client
 
@@ -109,9 +111,13 @@ async def run_realism_test(profile: dict, samples: list, text: str = "") -> dict
         raise RuntimeError("Giọng nói này chưa có speaker_id (chưa huấn luyện xong).")
 
     # 1. Synthesize through the real playback pipeline: base TTS -> RVC convert.
+    # Both rvc_client.convert() and the resemblyzer/librosa embedding calls below are
+    # blocking (HTTP round-trip / CPU-bound audio decode) -- offload them so a manager
+    # running this test doesn't stall every other concurrent request (e.g. real users'
+    # /api/speak calls) for the duration, same reasoning as voice_engine.speak_text().
     base_voice = profile.get("base_tts_voice") or tts.DEFAULT_VOICE
     tts_audio, base_mime = await tts.synthesize(text, voice=base_voice)
-    synth_audio = rvc_client.convert(tts_audio, profile["speaker_id"], mime=base_mime)
+    synth_audio = await asyncio.to_thread(rvc_client.convert, tts_audio, profile["speaker_id"], mime=base_mime)
     if synth_audio is tts_audio:
         raise RuntimeError(
             "Không thể chuyển đổi giọng qua RVC (Colab có thể đang tắt hoặc model chưa sẵn sàng) "
@@ -119,13 +125,13 @@ async def run_realism_test(profile: dict, samples: list, text: str = "") -> dict
         )
 
     # 2. Embed the synthesized clip + every original sample.
-    synth_embed = _embed_audio_bytes(synth_audio)
+    synth_embed = await asyncio.to_thread(_embed_audio_bytes, synth_audio)
 
     sample_scores = []
     embeddings = []
     for s in valid_samples:
         try:
-            emb = _embed_audio_file(s["file_path"])
+            emb = await asyncio.to_thread(_embed_audio_file, s["file_path"])
         except Exception as e:
             sample_scores.append({
                 "sample_id": s["id"], "script_id": s["script_id"],

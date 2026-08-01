@@ -17,3 +17,19 @@ requests>=2.31.0
 # binary on PATH (used by librosa, a resemblyzer dependency).
 resemblyzer>=0.1.4
 soundfile>=0.12.1
+
+# Voice feature — STT (voice/stt.py, POST /api/transcribe), the input half of
+# the voice loop. Also needs `ffmpeg` on PATH (Whisper shells out to it to
+# decode webm/ogg/m4a/mp3). Model itself is loaded lazily on first use.
+openai-whisper>=20231117
+
+# Legal compliance — AI-generated voice disclosure + provenance tag prepended
+# to RVC-cloned output (engine/voice_engine.py), required by Vietnam's Law on
+# Artificial Intelligence (134/2025/QH15). Needs `ffmpeg` on PATH (already
+# required above).
+pydub>=0.25.1
+
+# STT test tooling (tools/test_stt.py, tools/eval_stt_wer.py) — same installable
+# SDK rag-legal-assistant uses, so these scripts exercise the real client path
+# instead of hand-rolled requests calls.
+-e ../clone-voice-client

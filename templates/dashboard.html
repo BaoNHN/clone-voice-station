@@ -174,6 +174,7 @@
       <div class="field"><label>Timeout health/status (s)</label><input type="number" id="tShort"/></div>
       <div class="field"><label>Timeout download model (s)</label><input type="number" id="tDownload"/></div>
       <div class="field"><label>Timeout F5-TTS (s)</label><input type="number" id="tF5tts"/></div>
+      <div class="field"><label>Timeout transcribe (s)</label><input type="number" id="tTranscribe"/></div>
       <button class="btn" onclick="saveRvcTimeouts()">Lưu timeout</button>
     </div>
   </div>
@@ -286,6 +287,7 @@ async function loadRvcConfig() {
     document.getElementById('tShort').value        = cfg.timeout_short;
     document.getElementById('tDownload').value     = cfg.timeout_download;
     document.getElementById('tF5tts').value        = cfg.timeout_f5tts;
+    document.getElementById('tTranscribe').value   = cfg.timeout_transcribe;
     const pill = document.getElementById('rvcPill');
     pill.className = 'pill ' + (cfg.available ? 'on' : 'off');
     pill.innerHTML = '<span class="dot"></span>' + (cfg.available ? 'Online' : 'Offline');
@@ -325,6 +327,7 @@ async function saveRvcTimeouts() {
         timeout_short:    parseInt(document.getElementById('tShort').value, 10),
         timeout_download: parseInt(document.getElementById('tDownload').value, 10),
         timeout_f5tts:    parseInt(document.getElementById('tF5tts').value, 10),
+        timeout_transcribe: parseInt(document.getElementById('tTranscribe').value, 10),
       }),
     });
     toast('Đã lưu timeout.');
@@ -341,21 +344,35 @@ async function loadClients() {
     const clients = await api('/manager/clients');
     const body = document.getElementById('clientsBody');
     document.getElementById('clientsEmpty').style.display = clients.length ? 'none' : 'block';
+    // data-* attributes only -- never build onclick="..." from user-controlled strings
+    // (webhook_url is settable by any client app via POST /api/webhook with no manager
+    // auth; embedding it into an inline event-handler attribute is a stored-XSS vector
+    // even after HTML-escaping, since the browser HTML-decodes attribute text *before*
+    // parsing it as JS).
     body.innerHTML = clients.map(c => `
-      <tr>
+      <tr data-id="${c.id}" data-name="${escapeHtml(c.name)}" data-webhook="${escapeHtml(c.webhook_url || '')}">
         <td>${escapeHtml(c.name)}</td>
         <td class="mono key-reveal">${escapeHtml(c.api_key)}</td>
         <td class="mono">${c.webhook_url
           ? escapeHtml(c.webhook_url)
           : '<span style="color:#77778a;">— chưa đăng ký —</span>'}
-          <button class="btn ghost" style="margin-left:6px;" onclick="setClientWebhook(${c.id}, '${escapeHtml(c.webhook_url || '')}')">Đặt webhook</button>
+          <button class="btn ghost" style="margin-left:6px;" data-action="set-webhook">Đặt webhook</button>
         </td>
         <td>${new Date(c.created_at * 1000).toLocaleString('vi-VN')}</td>
-        <td><button class="btn danger" onclick="removeClient(${c.id}, '${escapeHtml(c.name)}')">Xoá</button></td>
+        <td><button class="btn danger" data-action="remove-client">Xoá</button></td>
       </tr>
     `).join('');
   } catch (e) { toast(e.message, 'error'); }
 }
+
+document.getElementById('clientsBody').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const row = btn.closest('tr');
+  const id = Number(row.dataset.id);
+  if (btn.dataset.action === 'set-webhook') setClientWebhook(id, row.dataset.webhook);
+  else if (btn.dataset.action === 'remove-client') removeClient(id, row.dataset.name);
+});
 
 async function createClient() {
   const nameEl = document.getElementById('newClientName');
@@ -404,10 +421,14 @@ async function loadProfiles() {
     const profiles = await api('/manager/profiles');
     const body = document.getElementById('profilesBody');
     document.getElementById('profilesEmpty').style.display = profiles.length ? 'none' : 'block';
+    // data-* attributes only -- p.name is set by an end-user of any client app via
+    // POST /api/profiles (the lowest-trust actor in the system); never interpolate it
+    // into an onclick="..." attribute, see loadClients() above for why that's unsafe
+    // even after HTML-escaping.
     body.innerHTML = profiles.map(p => {
       const canRetrain = p.sample_count >= MIN_SAMPLES && p.status !== 'training';
       return `
-      <tr>
+      <tr data-id="${p.id}" data-name="${escapeHtml(p.name)}">
         <td>${p.id}</td>
         <td>${escapeHtml(p.name)}</td>
         <td>${escapeHtml(p.client_name)}</td>
@@ -415,15 +436,27 @@ async function loadProfiles() {
         <td>${p.sample_count}</td>
         <td class="mono">${escapeHtml(p.speaker_id || '—')}</td>
         <td>
-          <button class="btn ghost" ${canRetrain ? '' : 'disabled'} onclick="retrainProfile(${p.id})">Huấn luyện lại</button>
-          <button class="btn ghost" ${p.status === 'ready' ? '' : 'disabled'} onclick="openRealismModal(${p.id}, '${escapeHtml(p.name)}')">🎯 Test độ giống</button>
-          <button class="btn ghost" onclick="disableProfile(${p.id})">Vô hiệu hoá</button>
-          <button class="btn danger" onclick="removeProfile(${p.id}, '${escapeHtml(p.name)}')">Xoá</button>
+          <button class="btn ghost" data-action="retrain" ${canRetrain ? '' : 'disabled'}>Huấn luyện lại</button>
+          <button class="btn ghost" data-action="realism-test" ${p.status === 'ready' ? '' : 'disabled'}>🎯 Test độ giống</button>
+          <button class="btn ghost" data-action="disable">Vô hiệu hoá</button>
+          <button class="btn danger" data-action="remove">Xoá</button>
         </td>
       </tr>`;
     }).join('');
   } catch (e) { toast(e.message, 'error'); }
 }
+
+document.getElementById('profilesBody').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn || btn.disabled) return;
+  const row = btn.closest('tr');
+  const id = Number(row.dataset.id);
+  const name = row.dataset.name;
+  if (btn.dataset.action === 'retrain') retrainProfile(id);
+  else if (btn.dataset.action === 'realism-test') openRealismModal(id, name);
+  else if (btn.dataset.action === 'disable') disableProfile(id);
+  else if (btn.dataset.action === 'remove') removeProfile(id, name);
+});
 
 async function retrainProfile(id) {
   try { await api(`/manager/profiles/${id}/retrain`, { method: 'POST' }); toast('Đã gửi yêu cầu huấn luyện lại.'); loadProfiles(); }

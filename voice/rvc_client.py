@@ -25,12 +25,13 @@ from database.database import get_setting
 # after that, whatever's stored in `settings` (editable via the manager
 # dashboard) always wins. See get_pitch()/get_index_rate()/get_timeout().
 _DEFAULTS = {
-    "rvc_timeout_convert":  os.getenv("RVC_TIMEOUT_CONVERT", "20"),    # seconds
-    "rvc_timeout_short":    os.getenv("RVC_TIMEOUT_SHORT", "5"),       # health/status checks
-    "rvc_timeout_download": os.getenv("RVC_TIMEOUT_DOWNLOAD", "180"),  # trained model can be 50-150MB
-    "rvc_timeout_f5tts":    os.getenv("RVC_TIMEOUT_F5TTS", "30"),      # F5-TTS is slower than RVC convert
-    "rvc_pitch":            os.getenv("RVC_PITCH", "0"),
-    "rvc_index_rate":       os.getenv("RVC_INDEX_RATE", "0.75"),
+    "rvc_timeout_convert":    os.getenv("RVC_TIMEOUT_CONVERT", "20"),     # seconds
+    "rvc_timeout_short":      os.getenv("RVC_TIMEOUT_SHORT", "5"),        # health/status checks
+    "rvc_timeout_download":   os.getenv("RVC_TIMEOUT_DOWNLOAD", "180"),   # trained model can be 50-150MB
+    "rvc_timeout_f5tts":      os.getenv("RVC_TIMEOUT_F5TTS", "30"),       # F5-TTS is slower than RVC convert
+    "rvc_timeout_transcribe": os.getenv("RVC_TIMEOUT_TRANSCRIBE", "20"),  # PhoWhisper-large on a T4, ~real-time
+    "rvc_pitch":              os.getenv("RVC_PITCH", "0"),
+    "rvc_index_rate":         os.getenv("RVC_INDEX_RATE", "0.75"),
 }
 
 
@@ -47,7 +48,7 @@ def get_index_rate() -> float:
 
 
 def get_timeout(name: str) -> int:
-    """name: one of 'convert' | 'short' | 'download' | 'f5tts'."""
+    """name: one of 'convert' | 'short' | 'download' | 'f5tts' | 'transcribe'."""
     key = f"rvc_timeout_{name}"
     return int(get_setting(key, _DEFAULTS[key]))
 
@@ -192,6 +193,35 @@ def synthesize_f5tts(gen_text: str, ref_audio_bytes: bytes = None, ref_text: str
         return None
     except requests.exceptions.RequestException as e:
         print(f"[F5-TTS] Endpoint unreachable ({e}) — falling back to edge-TTS.")
+        return None
+
+
+def transcribe_remote(audio_bytes: bytes, mime: str = "audio/webm", language: str = None) -> dict:
+    """
+    Calls the PhoWhisper (Vietnamese-tuned) STT endpoint on Colab (see
+    colab/voice_server.ipynb, "Speech-to-Text: PhoWhisper" section) — the primary ASR
+    path. Returns None if the endpoint is unset/unreachable/errors, same fallback
+    contract as synthesize_f5tts(): callers must fall back to the local, CPU-only
+    openai-whisper model in voice/stt.py in that case.
+    """
+    endpoint = get_endpoint()
+    if not endpoint:
+        return None
+
+    data = {"language": language} if language else {}
+    try:
+        resp = requests.post(
+            f"{endpoint}/transcribe",
+            files={"audio": ("input.webm", audio_bytes, mime)},
+            data=data,
+            timeout=get_timeout("transcribe"),
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        print(f"[STT] /transcribe returned {resp.status_code} — falling back to local Whisper.")
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"[STT] Endpoint unreachable ({e}) — falling back to local Whisper.")
         return None
 
 

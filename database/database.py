@@ -446,16 +446,6 @@ def get_voice_profile(profile_id: int):
     return _voice_profile_row_to_dict(row) if row else None
 
 
-def owns_profile(profile: dict, client_id: int, external_user_id: str) -> bool:
-    """True if `profile` is selectable/mutable by this (client_id, external_user_id) —
-    either the shared builtin voice, or a cloned voice this end user owns."""
-    if not profile:
-        return False
-    if profile["kind"] == "builtin":
-        return True
-    return profile["client_id"] == client_id and profile["external_user_id"] == external_user_id
-
-
 def count_cloned_voice_profiles(client_id: int, external_user_id: str) -> int:
     conn = sqlite3.connect(DB_NAME)
     row  = conn.execute(

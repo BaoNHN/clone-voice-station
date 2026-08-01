@@ -1,3 +1,4 @@
+import asyncio
 import mimetypes
 import os
 import secrets
@@ -24,7 +25,7 @@ from database.database import (
     create_notification, mark_notification_delivered, list_undelivered_notifications,
     VOICE_SAMPLES_DIR, MIN_TRAIN_SAMPLES, MAX_CLONED_VOICES_PER_USER,
 )
-from voice import rvc_client
+from voice import rvc_client, stt
 from voice.scripts import get_scripts
 from engine import voice_engine, realism_engine
 
@@ -162,10 +163,11 @@ async def get_rvc_config_route(manager: str = Depends(require_manager)):
         "available":   rvc_client.is_available(),
         "pitch":       rvc_client.get_pitch(),
         "index_rate":  rvc_client.get_index_rate(),
-        "timeout_convert":  rvc_client.get_timeout("convert"),
-        "timeout_short":    rvc_client.get_timeout("short"),
-        "timeout_download": rvc_client.get_timeout("download"),
-        "timeout_f5tts":    rvc_client.get_timeout("f5tts"),
+        "timeout_convert":    rvc_client.get_timeout("convert"),
+        "timeout_short":      rvc_client.get_timeout("short"),
+        "timeout_download":   rvc_client.get_timeout("download"),
+        "timeout_f5tts":      rvc_client.get_timeout("f5tts"),
+        "timeout_transcribe": rvc_client.get_timeout("transcribe"),
     }
 
 
@@ -179,7 +181,7 @@ async def set_rvc_config_route(request: Request, manager: str = Depends(require_
         set_setting("rvc_pitch", str(int(data["pitch"])))
     if "index_rate" in data:
         set_setting("rvc_index_rate", str(float(data["index_rate"])))
-    for key in ("convert", "short", "download", "f5tts"):
+    for key in ("convert", "short", "download", "f5tts", "transcribe"):
         if f"timeout_{key}" in data:
             set_setting(f"rvc_timeout_{key}", str(int(data[f"timeout_{key}"])))
 
@@ -518,6 +520,41 @@ async def profile_status_route(profile_id: int, external_user_id: str, client: d
     if not profile or (profile["kind"] == "cloned" and not _owns_cloned(profile, client["id"], external_user_id)):
         raise HTTPException(status_code=404, detail="Không tìm thấy.")
     return profile
+
+
+@app.post("/api/transcribe")
+async def transcribe_route(
+    audio: UploadFile = File(...),
+    language: str = Form(None),
+    client: dict = Depends(require_client),
+):
+    """Speech-to-Text — input half of the voice loop (see /api/speak below for
+    the output half). A client app posts recorded microphone audio here and
+    gets back plain text to feed into its own assistant as a normal text
+    query; this service never sees or needs to know what that query means.
+
+    Tries the Colab-hosted PhoWhisper endpoint first (Vietnamese-tuned, see
+    voice/rvc_client.py's transcribe_remote() and colab/voice_server.ipynb) and
+    falls back to the local, CPU-only openai-whisper model (voice/stt.py)
+    whenever Colab is unset/unreachable — same degrade-gracefully contract as
+    /api/speak's RVC conversion."""
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Không có dữ liệu âm thanh.")
+
+    mime = audio.content_type or mimetypes.guess_type(audio.filename or "")[0] or "audio/webm"
+
+    result = await asyncio.to_thread(rvc_client.transcribe_remote, audio_bytes, mime, language or None)
+    if result is None:
+        try:
+            result = await asyncio.to_thread(stt.transcribe, audio_bytes, mime, language or None)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Không thể chuyển giọng nói thành văn bản: {e}")
+
+    if not result.get("text"):
+        raise HTTPException(status_code=422, detail="Không nhận diện được nội dung giọng nói.")
+
+    return result
 
 
 @app.post("/api/speak")
