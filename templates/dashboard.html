@@ -241,6 +241,11 @@
 
 <script>
 const MIN_SAMPLES = {{ min_samples }};
+// csrf_token is a secrets.token_urlsafe() value (letters/digits/-/_ only, see
+// app.py) so it's always safe to embed directly in a JS string literal here --
+// unlike user-controlled data (see loadClients()/loadProfiles() above), there's
+// no HTML-escaping-vs-JS-context mismatch to worry about for a value this shape.
+const CSRF_TOKEN = "{{ csrf_token }}";
 
 function toast(msg, kind) {
   const t = document.getElementById('toast');
@@ -252,7 +257,12 @@ function toast(msg, kind) {
 }
 
 async function api(path, opts) {
-  const res = await fetch(path, opts || {});
+  opts = opts || {};
+  // Sent on every request (harmless on GETs, required on POST/PUT/DELETE --
+  // see require_manager() in app.py). Defense-in-depth on top of the session
+  // cookie's own SameSite=Lax protection.
+  opts.headers = Object.assign({}, opts.headers, { 'X-CSRF-Token': CSRF_TOKEN });
+  const res = await fetch(path, opts);
   if (res.status === 401) { window.location.href = '/login'; throw new Error('unauthorized'); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));

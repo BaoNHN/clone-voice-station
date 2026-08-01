@@ -2,6 +2,7 @@ import asyncio
 import mimetypes
 import os
 import secrets
+import time
 import uuid
 
 import requests
@@ -62,10 +63,48 @@ def manager_logged_in(request: Request) -> bool:
     return bool(request.session.get("manager"))
 
 
+# CSRF: the dashboard's session cookie defaults to Starlette's SameSite=Lax, which
+# already blocks the browser from attaching it to most cross-site state-changing
+# requests — this token is defense-in-depth on top of that, checked here (the one
+# dependency every /manager/* route already uses) rather than per-route, and only
+# for methods that actually change state. Login mints it into the session (see
+# login_submit); dashboard.html echoes it back on every fetch() via the api() helper.
+CSRF_HEADER = "X-CSRF-Token"
+_CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
 def require_manager(request: Request):
     if not manager_logged_in(request):
         raise HTTPException(status_code=401, detail="Not logged in")
+    if request.method not in _CSRF_SAFE_METHODS:
+        token = request.headers.get(CSRF_HEADER)
+        if not token or token != request.session.get("csrf_token"):
+            raise HTTPException(status_code=403, detail="Thiếu hoặc sai CSRF token — vui lòng tải lại trang.")
     return request.session["manager"]
+
+
+# Login rate limiting: in-process only (a single-worker deployment, matching this
+# service's thesis scale) — tracks recent failed attempts per client IP and locks
+# out further tries for a cooldown window. A multi-worker/multi-instance deployment
+# would need a shared store (e.g. Redis) instead of this module-level dict.
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_LOCKOUT_SEC  = 300  # 5 minutes
+_failed_logins: dict[str, list[float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _login_locked_out(ip: str) -> bool:
+    now = time.time()
+    recent = [t for t in _failed_logins.get(ip, []) if now - t < LOGIN_LOCKOUT_SEC]
+    _failed_logins[ip] = recent
+    return len(recent) >= LOGIN_MAX_ATTEMPTS
+
+
+def _record_failed_login(ip: str):
+    _failed_logins.setdefault(ip, []).append(time.time())
 
 
 def _owns_cloned(profile: dict, client_id: int, external_user_id: str) -> bool:
@@ -130,12 +169,23 @@ async def login_page(request: Request):
 
 @app.post("/login", response_class=HTMLResponse)
 async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+    ip = _client_ip(request)
+    if _login_locked_out(ip):
+        return templates.TemplateResponse(
+            request, "login.html",
+            {"error": "Quá nhiều lần đăng nhập sai — vui lòng thử lại sau 5 phút."}, status_code=429,
+        )
+
     if not verify_manager_login(username, password):
+        _record_failed_login(ip)
         return templates.TemplateResponse(
             request, "login.html",
             {"error": "Sai tên đăng nhập hoặc mật khẩu."}, status_code=401,
         )
+
+    _failed_logins.pop(ip, None)
     request.session["manager"] = username
+    request.session["csrf_token"] = secrets.token_urlsafe(32)
     return RedirectResponse("/", status_code=302)
 
 
@@ -149,8 +199,13 @@ async def logout_route(request: Request):
 async def dashboard_page(request: Request):
     if not manager_logged_in(request):
         return RedirectResponse("/login", status_code=302)
+    # Sessions created before CSRF protection was added won't have a token yet --
+    # mint one now rather than forcing an explicit re-login.
+    if not request.session.get("csrf_token"):
+        request.session["csrf_token"] = secrets.token_urlsafe(32)
     return templates.TemplateResponse(request, "dashboard.html", {
         "manager": request.session["manager"],
+        "csrf_token": request.session["csrf_token"],
         "min_samples": MIN_TRAIN_SAMPLES,
     })
 
