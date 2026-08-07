@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>STT Lab — Hướng dẫn kiến trúc &amp; sử dụng</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: #16161d; color: #e8e8ec; line-height: 1.6;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  .subtitle { color: #9a9aa8; font-size: 15px; margin: 0 0 32px; }
+  h2 {
+    font-size: 19px; margin: 40px 0 12px; padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+  h3 { font-size: 16px; color: #cfcfda; margin: 22px 0 8px; }
+  p { color: #cfcfda; margin: 10px 0; }
+  code {
+    font-family: "SF Mono", Consolas, monospace; font-size: 13.5px;
+    background: #1f1f29; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 4px; padding: 1px 6px; color: #ffd25a;
+  }
+  pre {
+    background: #1f1f29; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
+    padding: 16px 18px; overflow-x: auto; font-size: 13.5px;
+  }
+  pre code { background: none; border: none; padding: 0; color: #cfe0ff; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0 20px; font-size: 14.5px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.08); vertical-align: top; }
+  th { color: #9a9aa8; font-weight: 600; }
+  a { color: #6c8cff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul, ol { color: #cfcfda; padding-left: 22px; }
+  li { margin: 4px 0; }
+  .card {
+    background: #1f1f29; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
+    padding: 16px 20px; margin: 14px 0;
+  }
+  .tag {
+    display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px;
+    background: rgba(108,140,255,0.15); color: #a8bcff; margin-right: 6px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>🎙 STT Lab — Hướng dẫn kiến trúc &amp; sử dụng</h1>
+<p class="subtitle">Tài liệu mô tả toàn bộ hệ thống giọng nói (STT) trên 3 repo</p>
+
+<table>
+  <thead><tr><th>Repo</th><th>Vai trò</th></tr></thead>
+  <tbody>
+    <tr><td><a href="https://github.com/BaoNHN/clone-voice-station">clone-voice-station</a></td><td>Service trung tâm — training, storage, trang tự phục vụ STT Lab</td></tr>
+    <tr><td><a href="https://github.com/BaoNHN/clone-voice-clien">clone-voice-client</a></td><td>SDK Python mỏng — HTTP client + chế độ chạy Whisper cục bộ trong app</td></tr>
+    <tr><td><a href="https://github.com/BaoNHN/voice-lab-example">voice-lab-example</a></td><td>App ví dụ độc lập — chứng minh chế độ "chạy trong thư viện app" hoạt động thật</td></tr>
+  </tbody>
+</table>
+
+<h2>1. Vì sao có 3 repo tách biệt</h2>
+<p><code>clone-voice-client</code> không nằm trong <code>clone-voice-station</code> vì nó là SDK dùng chung cho <em>bất kỳ</em> host app nào, và version của nó không nên khoá theo nhịp release của server. <code>voice-lab-example</code> cũng không nằm trong <code>clone-voice-client</code> vì nó chỉ là một app tiêu thụ SDK đó, không phải một phần của bản thân SDK.</p>
+
+<h2>2. Hai chế độ chạy STT</h2>
+<div class="card">
+  <span class="tag">Remote</span> lazy-load — host app gọi <code>POST /api/transcribe</code> trên <code>clone-voice-station</code>, Whisper chạy trên server, lazy-load lần gọi đầu tiên.
+</div>
+<div class="card">
+  <span class="tag">Local</span> nhúng thư viện — <code>clone-voice-client[local]</code> chạy Whisper (và LoRA adapter nếu có) ngay trong process của host app, không gọi qua mạng tới voice-station.
+</div>
+<p>Hai chế độ <strong>cộng thêm</strong>, không thay thế nhau — remote vẫn là mặc định không đổi.</p>
+
+<h2>3. STT Lab — trang tự phục vụ cho khách (<code>/stt-lab</code>)</h2>
+<p>Khác với luồng RVC (voice cloning) vốn cần API key từ host app, STT Lab cho khách <strong>tự đăng ký tài khoản trực tiếp</strong> (username/password, không API key). Vì trang công khai không có cổng chặn, mọi giới hạn tài nguyên (số adapter/khách, số mẫu/adapter, thời lượng audio, hàng đợi train cục bộ) đều được enforce chặt hơn so với luồng RVC.</p>
+
+<h3>Tier 1 — Hotword / prompt-bias (không cần GPU)</h3>
+<p>Khách tạo adapter, nhập danh sách từ khoá/thuật ngữ riêng. Không cần huấn luyện — dùng ngay để bias Whisper qua <code>initial_prompt</code>. Tải về <code>.stt-pack.zip</code> chứa <code>manifest.json</code> + <code>hotwords.json</code>.</p>
+
+<h3>Tier 2 — LoRA fine-tune thật (cần GPU)</h3>
+<p>Khách upload cặp (audio, transcript đúng), chọn base model (<code>whisper-tiny</code>/<code>whisper-base</code> — giới hạn vì VRAM máy chủ chỉ ~4GB và trang không có cổng chặn), rồi huấn luyện qua 1 trong 3 backend:</p>
+<ul>
+  <li><strong>Auto</strong> — thử Colab trước, tự động chuyển sang cục bộ nếu Colab không khả dụng (giống RVC).</li>
+  <li><strong>Colab</strong> — bắt buộc Colab, KHÔNG âm thầm chuyển sang cục bộ nếu thất bại (để so sánh trung thực 2 phương pháp).</li>
+  <li><strong>Local</strong> — luôn chạy trên máy chủ.</li>
+</ul>
+<p>Job cục bộ đi qua <strong>hàng đợi 1-job-tại-1-thời-điểm</strong> (<code>engine/stt_train_engine.py</code>) — khác với RVC hiện tại (không có hàng đợi cho local fallback, một lỗ hổng có thật được phát hiện khi khảo sát, không lặp lại ở đây vì STT Lab công khai hơn RVC).</p>
+<p>Tải về <code>.stt-pack.zip</code> (khi đã train xong) chứa thêm <code>adapter_model.safetensors</code> + <code>adapter_config.json</code> — dùng được thật qua <code>clone_voice_client.local_stt</code>.</p>
+
+<h3>Train tiếp từ pack cũ</h3>
+<p>Khách có thể upload lại <code>.stt-pack.zip</code> đã tải trước đó (<code>POST /api/stt/adapters/{id}/continue</code>) để train tiếp từ đúng weight cũ thay vì train lại từ đầu — vì data thô ban đầu đã bị xoá theo cam kết privacy, chỉ weight nhỏ được giữ lại.</p>
+
+<h3>Xoá dữ liệu</h3>
+<p>Khách có thể xoá từng adapter hoặc toàn bộ tài khoản bất cứ lúc nào — xoá thật cả DB lẫn file audio/model trên đĩa, không chỉ vô hiệu hoá.</p>
+
+<h2>4. Colab vs Local — so sánh 2 kiến trúc training</h2>
+<table>
+  <thead><tr><th></th><th>Colab</th><th>Local</th></tr></thead>
+  <tbody>
+    <tr><td>GPU</td><td>GPU miễn phí của Colab</td><td>GPU/CPU của máy chủ (~4GB VRAM)</td></tr>
+    <tr><td>Hàng đợi</td><td><code>queue.Queue()</code> riêng trong notebook</td><td><code>queue.Queue()</code> riêng trong <code>stt_train_engine.py</code></td></tr>
+    <tr><td>Chia sẻ tài nguyên</td><td>Cùng GPU với training RVC — có thể tranh chấp nếu chạy cùng lúc</td><td>Độc lập với RVC</td></tr>
+    <tr><td>Ép buộc mà không khả dụng</td><td>Báo lỗi rõ ràng, không tự chuyển</td><td>(luôn khả dụng nếu máy chạy được)</td></tr>
+  </tbody>
+</table>
+
+<h2>5. <code>clone-voice-client</code> — dùng trong host app</h2>
+<pre><code>from clone_voice_client import VoiceStationClient
+
+client = VoiceStationClient(base_url="http://127.0.0.1:8090", api_key="...")
+
+# Remote (mặc định, không đổi)
+result = client.transcribe(filename, audio_bytes, mime="audio/webm", language="vi")
+
+# Local — cần: pip install clone-voice-client[local]
+from clone_voice_client import local_stt
+pack = local_stt.load_pack("adapter.stt-pack.zip")   # tự nhận diện Tier 1 hay Tier 2
+result = client.transcribe_local(filename, audio_bytes, mime="audio/webm",
+                                  language="vi", pack=pack)</code></pre>
+<p><code>load_pack()</code> trả về <code>{"tier", "base_model", "hotwords", "adapter_dir"}</code> — <code>adapter_dir</code> chỉ có giá trị khi pack là Tier 2 (chứa LoRA weight thật), lúc đó <code>transcribe_local()</code> tự động dùng <code>transformers</code> + <code>peft</code> thay vì <code>openai-whisper</code> (PEFT chỉ gắn được vào model class của HF).</p>
+
+<h2>6. <code>voice-lab-example</code> — chạy thử</h2>
+<pre><code>cd voice-lab-example
+pip install -r requirements.txt      # kéo theo clone-voice-client[local] (nặng: torch+transformers+peft)
+python app.py                        # http://127.0.0.1:8091</code></pre>
+<p>Chat dùng retrieval TF-IDF thật trên bộ dữ liệu công khai <code>MrCookieDev/Vietnamese-Chatting-Dataset</code> (không phải câu trả lời cứng). Nút mic ghi âm → <code>POST /transcribe</code> → Whisper chạy ngay trong process của app này (không gọi <code>clone-voice-station</code> qua mạng).</p>
+<p>Muốn thấy hotword/LoRA áp dụng thật: chạy <code>clone-voice-station</code>, vào <code>/stt-lab</code>, tạo adapter, tải <code>.stt-pack.zip</code>, thả vào <code>voice-lab-example/stt_pack/</code>, khởi động lại.</p>
+
+<h2>7. API tham khảo nhanh (<code>clone-voice-station</code>)</h2>
+<pre><code>POST   /stt-lab/register              đăng ký khách (username/password)
+POST   /stt-lab/login
+POST   /stt-lab/logout
+GET    /stt-lab                       trang dashboard khách
+
+POST   /api/stt/adapters              tạo adapter (name, base_model)
+GET    /api/stt/adapters              danh sách adapter của khách
+GET    /api/stt/adapters/{id}         chi tiết 1 adapter (poll status)
+PUT    /api/stt/adapters/{id}         đổi tên / cập nhật hotwords
+DELETE /api/stt/adapters/{id}         xoá adapter (+ file trên đĩa)
+GET    /api/stt/adapters/{id}/download  tải .stt-pack.zip
+
+POST   /api/stt/adapters/{id}/samples          upload mẫu (audio, transcript)
+GET    /api/stt/adapters/{id}/samples          danh sách mẫu
+DELETE /api/stt/adapters/{id}/samples/{sid}    xoá 1 mẫu
+
+POST   /api/stt/adapters/{id}/train      {"backend": "auto"|"colab"|"local"}
+POST   /api/stt/adapters/{id}/continue   upload pack cũ để train tiếp
+
+DELETE /api/stt/account               xoá toàn bộ tài khoản + dữ liệu</code></pre>
+
+<h2>8. Giới hạn đã biết / ngoài phạm vi</h2>
+<ul>
+  <li>Chưa có preview WER trước/sau khi train.</li>
+  <li>Upload mẫu chỉ qua file, chưa có ghi âm trực tiếp trong <code>/stt-lab</code> (chỉ <code>voice-lab-example</code> có mic UI).</li>
+  <li><code>voice-lab-example</code> chưa demo Tier 2 LoRA (chỉ có sẵn hạ tầng, chưa nối UI/luồng thử).</li>
+  <li>Chưa tích hợp voice interaction vào ứng dụng chat chính (<code>rag-legal-assistant</code>) — đây vẫn là tính năng độc lập, minh hoạ qua <code>voice-lab-example</code>.</li>
+</ul>
+
+</div>
+</body>
+</html>
