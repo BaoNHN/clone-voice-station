@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>STT Lab — Đăng ký</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: #16161d; color: #e8e8ec;
+  }
+  .card {
+    width: 100%; max-width: 360px; padding: 32px; border-radius: 14px;
+    background: #1f1f29; border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { font-size: 12.5px; color: #9a9aa8; margin: 0 0 24px; }
+  label { display: block; font-size: 12.5px; color: #b6b6c2; margin: 14px 0 6px; }
+  input {
+    width: 100%; padding: 10px 12px; border-radius: 8px; font-size: 14px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+  }
+  input:focus { outline: none; border-color: #6c8cff; }
+  .hint { font-size: 11.5px; color: #74748a; margin-top: 4px; }
+  button {
+    width: 100%; margin-top: 22px; padding: 11px; border: none; border-radius: 8px;
+    background: #6c8cff; color: #0d0d12; font-weight: 600; font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: #86a2ff; }
+  .error {
+    margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: 13px;
+    background: rgba(217, 76, 76, 0.15); color: #ff8a8a; border: 1px solid rgba(217, 76, 76, 0.3);
+  }
+  .alt { margin-top: 18px; text-align: center; font-size: 12.5px; color: #9a9aa8; }
+  .alt a { color: #6c8cff; text-decoration: none; }
+  .alt a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🎙 STT Lab</h1>
+  <p class="sub">Tạo tài khoản khách — dữ liệu và từ khoá bạn thêm vào chỉ dùng để tinh chỉnh nhận dạng giọng nói cho chính bạn, không dùng cho mục đích nào khác. Bạn có thể xoá toàn bộ bất cứ lúc nào.</p>
+  <form method="post" action="/stt-lab/register">
+    <label for="username">Tên đăng nhập</label>
+    <input type="text" id="username" name="username" pattern="[a-zA-Z0-9_.\-]{3,32}" required autofocus/>
+    <div class="hint">3-32 ký tự, chỉ gồm chữ/số/_/./-</div>
+    <label for="password">Mật khẩu</label>
+    <input type="password" id="password" name="password" minlength="8" required/>
+    <div class="hint">Ít nhất 8 ký tự</div>
+    <button type="submit">Đăng ký</button>
+  </form>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <div class="alt">Đã có tài khoản? <a href="/stt-lab/login">Đăng nhập</a></div>
+</div>
+</body>
+</html>

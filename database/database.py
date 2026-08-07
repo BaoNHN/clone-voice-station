@@ -1,6 +1,7 @@
 # database.py
 
 import hashlib
+import json
 import os
 import secrets
 import shutil
@@ -29,6 +30,11 @@ MIN_TRAIN_SAMPLES = 5
 # there's enough traction to justify paying for more training capacity.
 # A client's end user must delete an old cloned voice before creating another one past this.
 MAX_CLONED_VOICES_PER_USER = 2
+
+# STT Lab (guest self-serve hotword adapters) — caps enforced server-side on
+# every write, regardless of what the page's own JS already limits client-side.
+MAX_HOTWORDS_PER_ADAPTER = 200
+MAX_HOTWORD_LEN = 80
 
 # First client seeded on a fresh DB — matches the app this service was extracted from.
 DEFAULT_CLIENT_NAME = "rag-legal-assistant"
@@ -101,6 +107,13 @@ def init_db():
             created_at        REAL
         )
     """)
+    # Migration for existing DBs missing progress_message (live status text shown
+    # in the frontend while status='training' -- see engine/voice_engine.py's
+    # progress_cb and GET /api/profiles/{id}/status).
+    try:
+        c.execute("ALTER TABLE voice_profiles ADD COLUMN progress_message TEXT")
+    except Exception:
+        pass
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS voice_samples (
@@ -157,6 +170,34 @@ def init_db():
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             username      TEXT UNIQUE,
             password_hash TEXT,
+            created_at    REAL
+        )
+    """)
+
+    # STT Lab — self-serve guest accounts (entirely separate from `managers`
+    # and from client apps' API-key-mediated end users). A guest registers
+    # directly on this service with no host app in the middle, so these
+    # credentials only ever unlock that guest's own stt_adapters rows.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS stt_guests (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT UNIQUE,
+            password_hash TEXT,
+            created_at    REAL
+        )
+    """)
+
+    # Tier 1 (hotword/prompt-bias) adapters. status/error_message/progress_message/
+    # adapter_path are intentionally absent — Tier 1 creation is synchronous with
+    # no training job. Tier 2 (LoRA fine-tune) will ALTER TABLE to add those,
+    # same migration style as clients.webhook_url / voice_profiles.progress_message.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS stt_adapters (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            guest_id      INTEGER,
+            name          TEXT,
+            base_model    TEXT DEFAULT 'whisper-small',
+            hotwords_json TEXT DEFAULT '[]',
             created_at    REAL
         )
     """)
@@ -299,6 +340,112 @@ def change_manager_password(username: str, new_password: str):
         "UPDATE managers SET password_hash=? WHERE username=?",
         (_hash_password(new_password), username)
     )
+    conn.commit()
+    conn.close()
+
+
+# =========================
+# STT LAB (guest self-serve hotword/prompt-bias adapters — Tier 1)
+# =========================
+def create_stt_guest(username: str, password: str) -> int:
+    """Raises sqlite3.IntegrityError if username is already taken — the
+    caller (app.py) turns that into a 409."""
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute(
+        "INSERT INTO stt_guests (username, password_hash, created_at) VALUES (?,?,?)",
+        (username, _hash_password(password), time.time())
+    )
+    guest_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return guest_id
+
+
+def verify_stt_guest_login(username: str, password: str):
+    conn = sqlite3.connect(DB_NAME)
+    row  = conn.execute(
+        "SELECT id, password_hash FROM stt_guests WHERE username=?", (username,)
+    ).fetchone()
+    conn.close()
+    if not row or not _verify_password(password, row[1]):
+        return None
+    return {"id": row[0], "username": username}
+
+
+def _stt_adapter_row_to_dict(row) -> dict:
+    return {
+        "id": row[0], "guest_id": row[1], "name": row[2], "base_model": row[3],
+        "hotwords": json.loads(row[4] or "[]"), "created_at": row[5],
+    }
+
+
+def list_stt_adapters(guest_id: int) -> list:
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute(
+        "SELECT id, guest_id, name, base_model, hotwords_json, created_at "
+        "FROM stt_adapters WHERE guest_id=? ORDER BY id ASC",
+        (guest_id,)
+    ).fetchall()
+    conn.close()
+    return [_stt_adapter_row_to_dict(r) for r in rows]
+
+
+def get_stt_adapter(adapter_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    row  = conn.execute(
+        "SELECT id, guest_id, name, base_model, hotwords_json, created_at "
+        "FROM stt_adapters WHERE id=?",
+        (adapter_id,)
+    ).fetchone()
+    conn.close()
+    return _stt_adapter_row_to_dict(row) if row else None
+
+
+def create_stt_adapter(guest_id: int, name: str) -> int:
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute(
+        "INSERT INTO stt_adapters (guest_id, name, created_at) VALUES (?,?,?)",
+        (guest_id, name, time.time())
+    )
+    adapter_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return adapter_id
+
+
+def rename_stt_adapter(adapter_id: int, name: str):
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("UPDATE stt_adapters SET name=? WHERE id=?", (name, adapter_id))
+    conn.commit()
+    conn.close()
+
+
+def update_stt_adapter_hotwords(adapter_id: int, hotwords: list):
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute(
+        "UPDATE stt_adapters SET hotwords_json=? WHERE id=?",
+        (json.dumps(hotwords), adapter_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_stt_adapter(adapter_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("DELETE FROM stt_adapters WHERE id=?", (adapter_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_stt_guest_account(guest_id: int):
+    """Full self-serve purge: every adapter this guest owns, then the account
+    itself — honors the commitment that a guest's data is theirs to erase
+    completely, not just disable."""
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("DELETE FROM stt_adapters WHERE guest_id=?", (guest_id,))
+    conn.execute("DELETE FROM stt_guests WHERE id=?", (guest_id,))
     conn.commit()
     conn.close()
 

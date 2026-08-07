@@ -1,9 +1,14 @@
 import asyncio
+import io
+import json
 import mimetypes
 import os
+import re
 import secrets
+import sqlite3
 import time
 import uuid
+import zipfile
 
 import requests
 from fastapi import FastAPI, Request, Form, File, UploadFile, BackgroundTasks, Header, HTTPException, Depends
@@ -25,10 +30,16 @@ from database.database import (
     verify_manager_login, change_manager_password,
     create_notification, mark_notification_delivered, list_undelivered_notifications,
     VOICE_SAMPLES_DIR, MIN_TRAIN_SAMPLES, MAX_CLONED_VOICES_PER_USER,
+    create_stt_guest, verify_stt_guest_login,
+    list_stt_adapters, get_stt_adapter, create_stt_adapter,
+    rename_stt_adapter, update_stt_adapter_hotwords, delete_stt_adapter,
+    delete_stt_guest_account,
+    MAX_HOTWORDS_PER_ADAPTER, MAX_HOTWORD_LEN,
 )
 from voice import rvc_client, stt
 from voice.scripts import get_scripts
 from engine import voice_engine, realism_engine
+from engine.server_log import read_recent_lines
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(VOICE_SAMPLES_DIR, exist_ok=True)
@@ -84,9 +95,11 @@ def require_manager(request: Request):
 
 
 # Login rate limiting: in-process only (a single-worker deployment, matching this
-# service's thesis scale) — tracks recent failed attempts per client IP and locks
-# out further tries for a cooldown window. A multi-worker/multi-instance deployment
-# would need a shared store (e.g. Redis) instead of this module-level dict.
+# service's thesis scale) — tracks recent failed attempts per (scope, IP) and locks
+# out further tries for a cooldown window. `scope` keeps the manager dashboard's
+# counter separate from the STT Lab guest counter(s) sharing this same dict. A
+# multi-worker/multi-instance deployment would need a shared store (e.g. Redis)
+# instead of this module-level dict.
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_LOCKOUT_SEC  = 300  # 5 minutes
 _failed_logins: dict[str, list[float]] = {}
@@ -96,15 +109,17 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _login_locked_out(ip: str) -> bool:
+def _login_locked_out(scope: str, ip: str, max_attempts: int = LOGIN_MAX_ATTEMPTS,
+                       window_sec: int = LOGIN_LOCKOUT_SEC) -> bool:
+    key = f"{scope}:{ip}"
     now = time.time()
-    recent = [t for t in _failed_logins.get(ip, []) if now - t < LOGIN_LOCKOUT_SEC]
-    _failed_logins[ip] = recent
-    return len(recent) >= LOGIN_MAX_ATTEMPTS
+    recent = [t for t in _failed_logins.get(key, []) if now - t < window_sec]
+    _failed_logins[key] = recent
+    return len(recent) >= max_attempts
 
 
-def _record_failed_login(ip: str):
-    _failed_logins.setdefault(ip, []).append(time.time())
+def _record_failed_login(scope: str, ip: str):
+    _failed_logins.setdefault(f"{scope}:{ip}", []).append(time.time())
 
 
 def _owns_cloned(profile: dict, client_id: int, external_user_id: str) -> bool:
@@ -113,6 +128,32 @@ def _owns_cloned(profile: dict, client_id: int, external_user_id: str) -> bool:
         and profile["client_id"] == client_id
         and profile["external_user_id"] == external_user_id
     )
+
+
+# ── Auth: STT Lab guest accounts (session, separate from both manager and
+# client-app auth — a guest arrives with no host app and no API key) ───────────
+REGISTER_MAX_ATTEMPTS = 10
+REGISTER_LOCKOUT_SEC  = 3600  # 1 hour, per IP — blunts mass account creation
+STT_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
+STT_MIN_PASSWORD_LEN = 8
+
+
+def stt_guest_logged_in(request: Request) -> bool:
+    return bool(request.session.get("stt_guest_id"))
+
+
+def require_stt_guest(request: Request) -> int:
+    if not stt_guest_logged_in(request):
+        raise HTTPException(status_code=401, detail="Not logged in")
+    if request.method not in _CSRF_SAFE_METHODS:
+        token = request.headers.get(CSRF_HEADER)
+        if not token or token != request.session.get("stt_csrf_token"):
+            raise HTTPException(status_code=403, detail="Thiếu hoặc sai CSRF token — vui lòng tải lại trang.")
+    return request.session["stt_guest_id"]
+
+
+def _owns_stt_adapter(adapter: dict, guest_id: int) -> bool:
+    return bool(adapter and adapter["guest_id"] == guest_id)
 
 
 # ── Notifications: manager-triggered delete/disable → end user ────────────────
@@ -170,20 +211,20 @@ async def login_page(request: Request):
 @app.post("/login", response_class=HTMLResponse)
 async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
     ip = _client_ip(request)
-    if _login_locked_out(ip):
+    if _login_locked_out("manager", ip):
         return templates.TemplateResponse(
             request, "login.html",
             {"error": "Quá nhiều lần đăng nhập sai — vui lòng thử lại sau 5 phút."}, status_code=429,
         )
 
     if not verify_manager_login(username, password):
-        _record_failed_login(ip)
+        _record_failed_login("manager", ip)
         return templates.TemplateResponse(
             request, "login.html",
             {"error": "Sai tên đăng nhập hoặc mật khẩu."}, status_code=401,
         )
 
-    _failed_logins.pop(ip, None)
+    _failed_logins.pop(f"manager:{ip}", None)
     request.session["manager"] = username
     request.session["csrf_token"] = secrets.token_urlsafe(32)
     return RedirectResponse("/", status_code=302)
@@ -207,6 +248,105 @@ async def dashboard_page(request: Request):
         "manager": request.session["manager"],
         "csrf_token": request.session["csrf_token"],
         "min_samples": MIN_TRAIN_SAMPLES,
+    })
+
+
+# ── STT Lab: guest self-serve hotword adapters — register/login/logout/page ────
+@app.get("/stt-lab/register", response_class=HTMLResponse)
+async def stt_register_page(request: Request):
+    if stt_guest_logged_in(request):
+        return RedirectResponse("/stt-lab", status_code=302)
+    return templates.TemplateResponse(request, "stt_guest_register.html", {"error": None})
+
+
+@app.post("/stt-lab/register", response_class=HTMLResponse)
+async def stt_register_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+    ip = _client_ip(request)
+    if _login_locked_out("stt_register", ip, REGISTER_MAX_ATTEMPTS, REGISTER_LOCKOUT_SEC):
+        return templates.TemplateResponse(
+            request, "stt_guest_register.html",
+            {"error": "Quá nhiều lần đăng ký — vui lòng thử lại sau 1 giờ."}, status_code=429,
+        )
+
+    if not STT_USERNAME_RE.match(username):
+        return templates.TemplateResponse(
+            request, "stt_guest_register.html",
+            {"error": "Tên đăng nhập phải dài 3-32 ký tự, chỉ gồm chữ/số/_/./-"}, status_code=400,
+        )
+    if len(password) < STT_MIN_PASSWORD_LEN:
+        return templates.TemplateResponse(
+            request, "stt_guest_register.html",
+            {"error": f"Mật khẩu phải có ít nhất {STT_MIN_PASSWORD_LEN} ký tự."}, status_code=400,
+        )
+
+    try:
+        guest_id = create_stt_guest(username, password)
+    except sqlite3.IntegrityError:
+        _record_failed_login("stt_register", ip)
+        return templates.TemplateResponse(
+            request, "stt_guest_register.html",
+            {"error": "Tên đăng nhập đã được sử dụng."}, status_code=409,
+        )
+
+    request.session["stt_guest_id"] = guest_id
+    request.session["stt_guest_username"] = username
+    request.session["stt_csrf_token"] = secrets.token_urlsafe(32)
+    return RedirectResponse("/stt-lab", status_code=302)
+
+
+@app.get("/stt-lab/login", response_class=HTMLResponse)
+async def stt_login_page(request: Request):
+    if stt_guest_logged_in(request):
+        return RedirectResponse("/stt-lab", status_code=302)
+    return templates.TemplateResponse(request, "stt_guest_login.html", {"error": None})
+
+
+@app.post("/stt-lab/login", response_class=HTMLResponse)
+async def stt_login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+    ip = _client_ip(request)
+    if _login_locked_out("stt", ip):
+        return templates.TemplateResponse(
+            request, "stt_guest_login.html",
+            {"error": "Quá nhiều lần đăng nhập sai — vui lòng thử lại sau 5 phút."}, status_code=429,
+        )
+
+    guest = verify_stt_guest_login(username, password)
+    if not guest:
+        _record_failed_login("stt", ip)
+        return templates.TemplateResponse(
+            request, "stt_guest_login.html",
+            {"error": "Sai tên đăng nhập hoặc mật khẩu."}, status_code=401,
+        )
+
+    _failed_logins.pop(f"stt:{ip}", None)
+    request.session["stt_guest_id"] = guest["id"]
+    request.session["stt_guest_username"] = guest["username"]
+    request.session["stt_csrf_token"] = secrets.token_urlsafe(32)
+    return RedirectResponse("/stt-lab", status_code=302)
+
+
+@app.post("/stt-lab/logout")
+async def stt_logout_route(request: Request):
+    # Pop only this feature's session keys — a manager and a guest logged in
+    # from the same browser must not log each other out (see require_manager's
+    # own `request.session["manager"]` sharing this same session cookie).
+    request.session.pop("stt_guest_id", None)
+    request.session.pop("stt_guest_username", None)
+    request.session.pop("stt_csrf_token", None)
+    return RedirectResponse("/stt-lab/login", status_code=302)
+
+
+@app.get("/stt-lab", response_class=HTMLResponse)
+async def stt_dashboard_page(request: Request):
+    if not stt_guest_logged_in(request):
+        return RedirectResponse("/stt-lab/login", status_code=302)
+    if not request.session.get("stt_csrf_token"):
+        request.session["stt_csrf_token"] = secrets.token_urlsafe(32)
+    return templates.TemplateResponse(request, "stt_guest_dashboard.html", {
+        "guest_username": request.session["stt_guest_username"],
+        "csrf_token": request.session["stt_csrf_token"],
+        "max_hotwords": MAX_HOTWORDS_PER_ADAPTER,
+        "max_hotword_len": MAX_HOTWORD_LEN,
     })
 
 
@@ -280,6 +420,17 @@ async def set_client_webhook_route(client_id: int, request: Request, manager: st
     data = await request.json()
     set_client_webhook(client_id, (data.get("webhook_url") or "").strip())
     return {"status": "ok"}
+
+
+# ── Manager dashboard: server log ───────────────────────────────────────────────
+@app.get("/manager/logs")
+async def get_server_logs_route(manager: str = Depends(require_manager)):
+    """Recent application-level events (training progress, Colab/local fallback
+    decisions, errors — see engine/server_log.py) so a manager can see what's
+    happening without watching the raw terminal. Not the full process stdout/
+    stderr or uvicorn's own per-request access log — those are noise for this
+    purpose; just this app's own logger.info()/warning()/error() calls."""
+    return {"lines": read_recent_lines(500)}
 
 
 # ── Manager dashboard: every voice profile, across every client ────────────────
@@ -731,6 +882,101 @@ async def list_notifications_route(external_user_id: str, client: dict = Depends
 @app.post("/api/notifications/{notification_id}/ack")
 async def ack_notification_route(notification_id: int, client: dict = Depends(require_client)):
     mark_notification_delivered(notification_id, client_id=client["id"])
+    return {"status": "ok"}
+
+
+# ── STT Lab: guest-owned hotword/prompt-bias adapters (Tier 1) ─────────────────
+def _clean_hotwords(raw) -> list:
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="hotwords phải là một danh sách chuỗi.")
+    if len(raw) > MAX_HOTWORDS_PER_ADAPTER:
+        raise HTTPException(status_code=400, detail=f"Tối đa {MAX_HOTWORDS_PER_ADAPTER} từ khoá.")
+    cleaned = []
+    seen = set()
+    for w in raw:
+        if not isinstance(w, str):
+            raise HTTPException(status_code=400, detail="Mỗi từ khoá phải là chuỗi.")
+        w = w.strip()
+        if not w or len(w) > MAX_HOTWORD_LEN:
+            raise HTTPException(status_code=400, detail=f"Mỗi từ khoá dài 1-{MAX_HOTWORD_LEN} ký tự.")
+        if w not in seen:
+            seen.add(w)
+            cleaned.append(w)
+    return cleaned
+
+
+def _get_owned_stt_adapter(adapter_id: int, guest_id: int) -> dict:
+    adapter = get_stt_adapter(adapter_id)
+    if not _owns_stt_adapter(adapter, guest_id):
+        raise HTTPException(status_code=404, detail="Không tìm thấy adapter.")
+    return adapter
+
+
+@app.post("/api/stt/adapters")
+async def create_stt_adapter_route(request: Request, guest_id: int = Depends(require_stt_guest)):
+    data = await request.json()
+    name = (data.get("name") or "").strip()
+    if not name or len(name) > 100:
+        raise HTTPException(status_code=400, detail="Tên adapter phải dài 1-100 ký tự.")
+    adapter_id = create_stt_adapter(guest_id, name)
+    return {"status": "ok", "adapter_id": adapter_id}
+
+
+@app.get("/api/stt/adapters")
+async def list_stt_adapters_route(guest_id: int = Depends(require_stt_guest)):
+    return list_stt_adapters(guest_id)
+
+
+@app.put("/api/stt/adapters/{adapter_id}")
+async def update_stt_adapter_route(adapter_id: int, request: Request, guest_id: int = Depends(require_stt_guest)):
+    _get_owned_stt_adapter(adapter_id, guest_id)
+    data = await request.json()
+    if "name" in data:
+        name = (data.get("name") or "").strip()
+        if not name or len(name) > 100:
+            raise HTTPException(status_code=400, detail="Tên adapter phải dài 1-100 ký tự.")
+        rename_stt_adapter(adapter_id, name)
+    if "hotwords" in data:
+        update_stt_adapter_hotwords(adapter_id, _clean_hotwords(data.get("hotwords")))
+    return {"status": "ok"}
+
+
+@app.get("/api/stt/adapters/{adapter_id}/download")
+async def download_stt_adapter_route(adapter_id: int, guest_id: int = Depends(require_stt_guest)):
+    adapter = _get_owned_stt_adapter(adapter_id, guest_id)
+
+    manifest = {
+        "adapter_id": adapter["id"],
+        "name": adapter["name"],
+        "base_model": adapter["base_model"],
+        "tier": 1,
+        "created_at": adapter["created_at"],
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        zf.writestr("hotwords.json", json.dumps(adapter["hotwords"], ensure_ascii=False, indent=2))
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{adapter_id}.stt-pack.zip"'},
+    )
+
+
+@app.delete("/api/stt/adapters/{adapter_id}")
+async def delete_stt_adapter_route(adapter_id: int, guest_id: int = Depends(require_stt_guest)):
+    _get_owned_stt_adapter(adapter_id, guest_id)
+    delete_stt_adapter(adapter_id)
+    return {"status": "ok"}
+
+
+@app.delete("/api/stt/account")
+async def delete_stt_account_route(request: Request, guest_id: int = Depends(require_stt_guest)):
+    delete_stt_guest_account(guest_id)
+    request.session.pop("stt_guest_id", None)
+    request.session.pop("stt_guest_username", None)
+    request.session.pop("stt_csrf_token", None)
     return {"status": "ok"}
 
 

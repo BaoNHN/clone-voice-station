@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>STT Lab — Adapter của bạn</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: #16161d; color: #e8e8ec; padding: 24px 32px 60px;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+  header h1 { font-size: 20px; margin: 0; }
+  header .who { font-size: 15px; color: #9a9aa8; }
+  header .actions button {
+    background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #cfcfda;
+    padding: 6px 12px; border-radius: 7px; font-size: 15px; cursor: pointer; margin-left: 8px;
+  }
+  header .actions button:hover { border-color: #6c8cff; color: #fff; }
+  header .actions button.danger { border-color: rgba(217,76,76,0.4); color: #ff8a8a; }
+  header .actions button.danger:hover { border-color: #e86868; color: #fff; }
+
+  .card {
+    background: #1f1f29; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
+    padding: 20px 22px; margin-bottom: 20px;
+  }
+  .card h2 { font-size: 18px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+  .card .desc { font-size: 15px; color: #9a9aa8; margin: 0 0 16px; }
+
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 15px; color: #9a9aa8; }
+  .field input {
+    padding: 8px 10px; border-radius: 7px; font-size: 16px; min-width: 140px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+  }
+  .field input:focus { outline: none; border-color: #6c8cff; }
+  .field.wide input { min-width: 320px; }
+
+  button.btn {
+    padding: 8px 14px; border: none; border-radius: 7px; font-size: 15px; font-weight: 600;
+    background: #6c8cff; color: #0d0d12; cursor: pointer;
+  }
+  button.btn:hover { background: #86a2ff; }
+  button.btn.danger { background: #d94c4c; color: #fff; }
+  button.btn.danger:hover { background: #e86868; }
+  button.btn.ghost { background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #cfcfda; }
+  button.btn.ghost:hover { border-color: #6c8cff; color: #fff; }
+  button.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 16px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; }
+  th { color: #9a9aa8; font-weight: 500; font-size: 15px; text-transform: uppercase; letter-spacing: .03em; }
+  td.mono { font-family: "SF Mono", Consolas, monospace; font-size: 15px; color: #b6b6c2; }
+
+  textarea.hotwords {
+    width: 100%; min-width: 260px; min-height: 64px; padding: 8px 10px; border-radius: 7px;
+    font-size: 15px; background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+    font-family: inherit; resize: vertical;
+  }
+  textarea.hotwords:focus { outline: none; border-color: #6c8cff; }
+  .hw-count { font-size: 13px; color: #9a9aa8; margin-top: 4px; }
+  .hw-count.over { color: #ff8a8a; }
+
+  .toast {
+    position: fixed; bottom: 20px; right: 20px; padding: 12px 16px; border-radius: 9px;
+    background: #2a2a37; border: 1px solid rgba(255,255,255,0.12); font-size: 16px;
+    display: none; max-width: 360px;
+  }
+  .toast.error { border-color: rgba(217,76,76,0.4); color: #ff8a8a; }
+  .toast.ok    { border-color: rgba(80,200,120,0.4); color: #6fe08a; }
+
+  .empty { color: #77778a; font-size: 16px; padding: 10px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🎙 STT Lab</h1>
+    <div class="who">Đăng nhập với <strong>{{ guest_username }}</strong></div>
+  </div>
+  <div class="actions">
+    <button onclick="logout()">Đăng xuất</button>
+    <button class="danger" onclick="deleteAccount()">Xoá tài khoản &amp; toàn bộ dữ liệu</button>
+  </div>
+</header>
+
+<!-- ══ Create adapter ══ -->
+<div class="card">
+  <h2>➕ Tạo adapter mới</h2>
+  <p class="desc">Mỗi adapter là một danh sách từ khoá/thuật ngữ riêng (tối đa {{ max_hotwords }} từ, mỗi từ tối đa {{ max_hotword_len }} ký tự) dùng để tăng độ chính xác nhận dạng giọng nói cho các thuật ngữ của bạn.</p>
+  <div class="row">
+    <div class="field wide">
+      <label>Tên adapter</label>
+      <input type="text" id="newAdapterName" placeholder="vd: thuat-ngu-phap-ly" maxlength="100"/>
+    </div>
+    <button class="btn" onclick="createAdapter()">+ Tạo adapter</button>
+  </div>
+</div>
+
+<!-- ══ Adapters ══ -->
+<div class="card">
+  <h2>📦 Adapter của bạn</h2>
+  <p class="desc">Dữ liệu chỉ dùng để tinh chỉnh nhận dạng giọng nói cho chính bạn. Xoá một adapter hoặc toàn bộ tài khoản bất cứ lúc nào — dữ liệu bị xoá vĩnh viễn.</p>
+  <div id="adaptersEmpty" class="empty" style="display:none;">Chưa có adapter nào — tạo một cái ở trên.</div>
+  <table id="adaptersTable" style="display:none;">
+    <thead><tr><th style="width:180px;">Tên</th><th>Từ khoá (mỗi dòng một từ)</th><th style="width:220px;"></th></tr></thead>
+    <tbody id="adaptersBody"></tbody>
+  </table>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const MAX_HOTWORDS = {{ max_hotwords }};
+// csrf_token is a secrets.token_urlsafe() value (letters/digits/-/_ only, see
+// app.py) so it's always safe to embed directly in a JS string literal here.
+const CSRF_TOKEN = "{{ csrf_token }}";
+
+function toast(msg, kind) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + (kind || 'ok');
+  t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.style.display = 'none', 4000);
+}
+
+async function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers, { 'X-CSRF-Token': CSRF_TOKEN });
+  const res = await fetch(path, opts);
+  if (res.status === 401) { window.location.href = '/stt-lab/login'; throw new Error('unauthorized'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+  return data;
+}
+
+function logout() {
+  fetch('/stt-lab/logout', { method: 'POST' }).then(() => window.location.href = '/stt-lab/login');
+}
+
+async function deleteAccount() {
+  if (!confirm('Xoá vĩnh viễn tài khoản và TOÀN BỘ adapter/từ khoá của bạn? Không thể hoàn tác.')) return;
+  try {
+    await api('/api/stt/account', { method: 'DELETE' });
+    window.location.href = '/stt-lab/login';
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function escapeHtml(s) {
+  return (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function loadAdapters() {
+  try {
+    const adapters = await api('/api/stt/adapters');
+    document.getElementById('adaptersEmpty').style.display = adapters.length ? 'none' : 'block';
+    document.getElementById('adaptersTable').style.display = adapters.length ? 'table' : 'none';
+    const body = document.getElementById('adaptersBody');
+    body.innerHTML = adapters.map(a => `
+      <tr data-id="${a.id}">
+        <td class="mono">${escapeHtml(a.name)}</td>
+        <td>
+          <textarea class="hotwords" data-id="${a.id}" rows="4">${escapeHtml((a.hotwords || []).join('\n'))}</textarea>
+          <div class="hw-count" data-count-for="${a.id}"></div>
+        </td>
+        <td>
+          <button class="btn" data-action="save">Lưu từ khoá</button>
+          <button class="btn ghost" data-action="download">Tải xuống</button>
+          <button class="btn danger" data-action="delete">Xoá</button>
+        </td>
+      </tr>
+    `).join('');
+    adapters.forEach(a => updateHwCount(a.id));
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function updateHwCount(id) {
+  const ta = document.querySelector(`textarea[data-id="${id}"]`);
+  const label = document.querySelector(`[data-count-for="${id}"]`);
+  if (!ta || !label) return;
+  const n = ta.value.split('\n').map(s => s.trim()).filter(Boolean).length;
+  label.textContent = `${n} / ${MAX_HOTWORDS} từ khoá`;
+  label.className = 'hw-count' + (n > MAX_HOTWORDS ? ' over' : '');
+}
+
+document.getElementById('adaptersBody').addEventListener('input', (e) => {
+  if (e.target.matches('textarea.hotwords')) updateHwCount(Number(e.target.dataset.id));
+});
+
+document.getElementById('adaptersBody').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const row = btn.closest('tr');
+  const id = Number(row.dataset.id);
+  if (btn.dataset.action === 'save') saveHotwords(id);
+  else if (btn.dataset.action === 'download') downloadAdapter(id);
+  else if (btn.dataset.action === 'delete') deleteAdapter(id, row.querySelector('td.mono').textContent);
+});
+
+async function createAdapter() {
+  const nameEl = document.getElementById('newAdapterName');
+  const name = nameEl.value.trim();
+  if (!name) return;
+  try {
+    await api('/api/stt/adapters', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    nameEl.value = '';
+    toast('Đã tạo adapter.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveHotwords(id) {
+  const ta = document.querySelector(`textarea[data-id="${id}"]`);
+  const hotwords = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+  try {
+    await api(`/api/stt/adapters/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotwords }),
+    });
+    toast('Đã lưu từ khoá.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function downloadAdapter(id) {
+  window.location.href = `/api/stt/adapters/${id}/download`;
+}
+
+async function deleteAdapter(id, name) {
+  if (!confirm(`Xoá adapter "${name}"? Không thể hoàn tác.`)) return;
+  try {
+    await api(`/api/stt/adapters/${id}`, { method: 'DELETE' });
+    toast('Đã xoá adapter.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+loadAdapters();
+</script>
+</body>
+</html>
