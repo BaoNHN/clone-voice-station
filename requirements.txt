@@ -23,6 +23,16 @@ soundfile>=0.12.1
 # decode webm/ogg/m4a/mp3). Model itself is loaded lazily on first use.
 openai-whisper>=20231117
 
+# STT Lab Tier 2 (voice/stt_local_train.py) — local LoRA fine-tuning of
+# Whisper when a guest picks "local" (or "auto" falls back to it because
+# Colab is unset/unreachable). Uses transformers' WhisperForConditionalGeneration,
+# not openai-whisper above — PEFT only attaches to the HF model class. Both
+# pull in torch already (see resemblyzer/openai-whisper), and are only
+# imported lazily inside stt_local_train.train(), same pattern as the rest
+# of this file's heavy deps.
+transformers>=4.40.0
+peft>=0.11.0
+
 # Legal compliance — AI-generated voice disclosure + provenance tag prepended
 # to RVC-cloned output (engine/voice_engine.py), required by Vietnam's Law on
 # Artificial Intelligence (134/2025/QH15). Needs `ffmpeg` on PATH (already

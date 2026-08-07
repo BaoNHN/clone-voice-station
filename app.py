@@ -5,10 +5,13 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import time
 import uuid
 import zipfile
+
+import soundfile as sf
 
 import requests
 from fastapi import FastAPI, Request, Form, File, UploadFile, BackgroundTasks, Header, HTTPException, Depends
@@ -35,14 +38,20 @@ from database.database import (
     rename_stt_adapter, update_stt_adapter_hotwords, delete_stt_adapter,
     delete_stt_guest_account,
     MAX_HOTWORDS_PER_ADAPTER, MAX_HOTWORD_LEN,
+    count_stt_adapters, MAX_STT_ADAPTERS_PER_GUEST, ALLOWED_STT_BASE_MODELS,
+    MIN_STT_TRAIN_SAMPLES, MAX_STT_TRAIN_SAMPLES, MAX_STT_SAMPLE_DURATION_SEC,
+    STT_SAMPLES_DIR, STT_MODELS_DIR,
+    add_stt_training_sample, list_stt_training_samples, get_stt_training_sample,
+    delete_stt_training_sample, set_stt_adapter_resume_path,
 )
 from voice import rvc_client, stt
 from voice.scripts import get_scripts
-from engine import voice_engine, realism_engine
+from engine import voice_engine, realism_engine, stt_train_engine
 from engine.server_log import read_recent_lines
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(VOICE_SAMPLES_DIR, exist_ok=True)
+os.makedirs(STT_SAMPLES_DIR, exist_ok=True)
 
 # Session secret for the manager dashboard login — generated once and persisted
 # to disk (gitignored, same spirit as voice_station.db) rather than hardcoded,
@@ -347,6 +356,9 @@ async def stt_dashboard_page(request: Request):
         "csrf_token": request.session["stt_csrf_token"],
         "max_hotwords": MAX_HOTWORDS_PER_ADAPTER,
         "max_hotword_len": MAX_HOTWORD_LEN,
+        "max_stt_adapters": MAX_STT_ADAPTERS_PER_GUEST,
+        "max_stt_train_samples": MAX_STT_TRAIN_SAMPLES,
+        "min_stt_train_samples": MIN_STT_TRAIN_SAMPLES,
     })
 
 
@@ -918,13 +930,23 @@ async def create_stt_adapter_route(request: Request, guest_id: int = Depends(req
     name = (data.get("name") or "").strip()
     if not name or len(name) > 100:
         raise HTTPException(status_code=400, detail="Tên adapter phải dài 1-100 ký tự.")
-    adapter_id = create_stt_adapter(guest_id, name)
+    base_model = data.get("base_model") or ALLOWED_STT_BASE_MODELS[0]
+    if base_model not in ALLOWED_STT_BASE_MODELS:
+        raise HTTPException(status_code=400, detail=f"base_model phải là một trong: {', '.join(ALLOWED_STT_BASE_MODELS)}")
+    if count_stt_adapters(guest_id) >= MAX_STT_ADAPTERS_PER_GUEST:
+        raise HTTPException(status_code=400, detail=f"Tối đa {MAX_STT_ADAPTERS_PER_GUEST} adapter mỗi tài khoản.")
+    adapter_id = create_stt_adapter(guest_id, name, base_model)
     return {"status": "ok", "adapter_id": adapter_id}
 
 
 @app.get("/api/stt/adapters")
 async def list_stt_adapters_route(guest_id: int = Depends(require_stt_guest)):
     return list_stt_adapters(guest_id)
+
+
+@app.get("/api/stt/adapters/{adapter_id}")
+async def get_stt_adapter_route(adapter_id: int, guest_id: int = Depends(require_stt_guest)):
+    return _get_owned_stt_adapter(adapter_id, guest_id)
 
 
 @app.put("/api/stt/adapters/{adapter_id}")
@@ -941,21 +963,128 @@ async def update_stt_adapter_route(adapter_id: int, request: Request, guest_id: 
     return {"status": "ok"}
 
 
+# ── STT Lab: training samples + Tier 2 (LoRA fine-tune) ────────────────────────
+@app.post("/api/stt/adapters/{adapter_id}/samples")
+async def upload_stt_sample_route(adapter_id: int, reference_text: str = Form(...),
+                                   audio: UploadFile = File(...), guest_id: int = Depends(require_stt_guest)):
+    _get_owned_stt_adapter(adapter_id, guest_id)
+    reference_text = reference_text.strip()
+    if not reference_text:
+        raise HTTPException(status_code=400, detail="Cần nhập transcript cho mẫu ghi âm.")
+    if len(list_stt_training_samples(adapter_id)) >= MAX_STT_TRAIN_SAMPLES:
+        raise HTTPException(status_code=400, detail=f"Tối đa {MAX_STT_TRAIN_SAMPLES} mẫu mỗi adapter.")
+
+    content = await audio.read()
+    ext = os.path.splitext(audio.filename or "")[1] or ".wav"
+    sample_dir = os.path.join(STT_SAMPLES_DIR, str(adapter_id))
+    os.makedirs(sample_dir, exist_ok=True)
+    sample_path = os.path.join(sample_dir, f"{uuid.uuid4()}{ext}")
+    with open(sample_path, "wb") as f:
+        f.write(content)
+
+    try:
+        info = sf.info(sample_path)
+        duration = info.frames / info.samplerate
+    except Exception:
+        os.remove(sample_path)
+        raise HTTPException(status_code=400, detail="Không đọc được file âm thanh.")
+    if duration > MAX_STT_SAMPLE_DURATION_SEC:
+        os.remove(sample_path)
+        raise HTTPException(status_code=400, detail=f"Mẫu ghi âm tối đa {MAX_STT_SAMPLE_DURATION_SEC} giây.")
+
+    sample_id = add_stt_training_sample(adapter_id, sample_path, reference_text)
+    return {"status": "ok", "sample_id": sample_id}
+
+
+@app.get("/api/stt/adapters/{adapter_id}/samples")
+async def list_stt_samples_route(adapter_id: int, guest_id: int = Depends(require_stt_guest)):
+    _get_owned_stt_adapter(adapter_id, guest_id)
+    return list_stt_training_samples(adapter_id)
+
+
+@app.delete("/api/stt/adapters/{adapter_id}/samples/{sample_id}")
+async def delete_stt_sample_route(adapter_id: int, sample_id: int, guest_id: int = Depends(require_stt_guest)):
+    _get_owned_stt_adapter(adapter_id, guest_id)
+    sample = get_stt_training_sample(sample_id)
+    if not sample or sample["adapter_id"] != adapter_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy mẫu.")
+    if os.path.exists(sample["audio_path"]):
+        os.remove(sample["audio_path"])
+    delete_stt_training_sample(sample_id)
+    return {"status": "ok"}
+
+
+@app.post("/api/stt/adapters/{adapter_id}/train")
+async def train_stt_adapter_route(adapter_id: int, request: Request, background_tasks: BackgroundTasks,
+                                   guest_id: int = Depends(require_stt_guest)):
+    adapter = _get_owned_stt_adapter(adapter_id, guest_id)
+    if adapter["status"] == "training":
+        raise HTTPException(status_code=400, detail="Adapter này đang được huấn luyện.")
+    if len(list_stt_training_samples(adapter_id)) < MIN_STT_TRAIN_SAMPLES:
+        raise HTTPException(status_code=400, detail=f"Cần tối thiểu {MIN_STT_TRAIN_SAMPLES} mẫu để huấn luyện.")
+
+    data = await request.json() if await request.body() else {}
+    backend = data.get("backend", "auto")
+    if backend not in ("auto", "colab", "local"):
+        raise HTTPException(status_code=400, detail="backend phải là auto | colab | local.")
+
+    background_tasks.add_task(stt_train_engine.run_training, adapter_id, backend)
+    return {"status": "ok", "message": "Đã bắt đầu huấn luyện."}
+
+
+@app.post("/api/stt/adapters/{adapter_id}/continue")
+async def continue_stt_adapter_route(adapter_id: int, pack: UploadFile = File(...),
+                                      guest_id: int = Depends(require_stt_guest)):
+    adapter = _get_owned_stt_adapter(adapter_id, guest_id)
+    content = await pack.read()
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            manifest = json.loads(zf.read("manifest.json"))
+            if manifest.get("tier") != 2:
+                raise HTTPException(status_code=400, detail="Pack này không chứa adapter đã huấn luyện (Tier 2).")
+            if manifest.get("base_model") != adapter["base_model"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Pack này dùng base_model={manifest.get('base_model')}, adapter hiện tại dùng {adapter['base_model']}.",
+                )
+            resume_dir = os.path.join(STT_MODELS_DIR, f"{adapter_id}_resume")
+            if os.path.isdir(resume_dir):
+                shutil.rmtree(resume_dir)
+            os.makedirs(resume_dir, exist_ok=True)
+            zf.extract("adapter_model.safetensors", resume_dir)
+            zf.extract("adapter_config.json", resume_dir)
+    except KeyError:
+        raise HTTPException(status_code=400, detail="Pack thiếu adapter_model.safetensors hoặc adapter_config.json.")
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="File không phải zip hợp lệ.")
+
+    set_stt_adapter_resume_path(adapter_id, resume_dir)
+    return {"status": "ok", "message": "Đã nạp adapter cũ — lần huấn luyện tiếp theo sẽ tiếp tục từ đây."}
+
+
 @app.get("/api/stt/adapters/{adapter_id}/download")
 async def download_stt_adapter_route(adapter_id: int, guest_id: int = Depends(require_stt_guest)):
     adapter = _get_owned_stt_adapter(adapter_id, guest_id)
 
+    has_lora = bool(adapter["adapter_path"]) and os.path.isdir(adapter["adapter_path"])
     manifest = {
         "adapter_id": adapter["id"],
         "name": adapter["name"],
         "base_model": adapter["base_model"],
-        "tier": 1,
+        "tier": 2 if has_lora else 1,
+        "backend_used": adapter["backend_used"] if has_lora else None,
         "created_at": adapter["created_at"],
     }
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
         zf.writestr("hotwords.json", json.dumps(adapter["hotwords"], ensure_ascii=False, indent=2))
+        if has_lora:
+            for fname in ("adapter_model.safetensors", "adapter_config.json"):
+                fpath = os.path.join(adapter["adapter_path"], fname)
+                if os.path.exists(fpath):
+                    zf.write(fpath, arcname=fname)
 
     return Response(
         content=buf.getvalue(),
@@ -964,15 +1093,37 @@ async def download_stt_adapter_route(adapter_id: int, guest_id: int = Depends(re
     )
 
 
+def _delete_stt_adapter_files(adapter: dict):
+    """Removes this adapter's training-sample audio files and trained-model
+    directory from disk — the DB-layer delete_stt_adapter()/
+    delete_stt_guest_account() only drop rows, by design (no filesystem
+    access in database.py), so this must run first while the paths are
+    still known."""
+    for sample in list_stt_training_samples(adapter["id"]):
+        if os.path.exists(sample["audio_path"]):
+            os.remove(sample["audio_path"])
+    sample_dir = os.path.join(STT_SAMPLES_DIR, str(adapter["id"]))
+    if os.path.isdir(sample_dir):
+        shutil.rmtree(sample_dir, ignore_errors=True)
+    if adapter["adapter_path"] and os.path.isdir(adapter["adapter_path"]):
+        shutil.rmtree(adapter["adapter_path"], ignore_errors=True)
+    resume_dir = os.path.join(STT_MODELS_DIR, f"{adapter['id']}_resume")
+    if os.path.isdir(resume_dir):
+        shutil.rmtree(resume_dir, ignore_errors=True)
+
+
 @app.delete("/api/stt/adapters/{adapter_id}")
 async def delete_stt_adapter_route(adapter_id: int, guest_id: int = Depends(require_stt_guest)):
-    _get_owned_stt_adapter(adapter_id, guest_id)
+    adapter = _get_owned_stt_adapter(adapter_id, guest_id)
+    _delete_stt_adapter_files(adapter)
     delete_stt_adapter(adapter_id)
     return {"status": "ok"}
 
 
 @app.delete("/api/stt/account")
 async def delete_stt_account_route(request: Request, guest_id: int = Depends(require_stt_guest)):
+    for adapter in list_stt_adapters(guest_id):
+        _delete_stt_adapter_files(adapter)
     delete_stt_guest_account(guest_id)
     request.session.pop("stt_guest_id", None)
     request.session.pop("stt_guest_username", None)

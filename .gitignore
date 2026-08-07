@@ -1,5 +1,7 @@
 /voice_samples/
 /voice_storage/
+/stt_training_samples/
+/stt_adapters_storage/
 /voice_station.db
 session_secret.txt
 .idea/

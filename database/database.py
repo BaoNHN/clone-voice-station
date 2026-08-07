@@ -14,6 +14,9 @@ DB_NAME  = os.path.join(BASE_DIR, "voice_station.db")
 VOICE_SAMPLES_DIR = os.path.join(BASE_DIR, "voice_samples")
 VOICE_MODELS_DIR  = os.path.join(BASE_DIR, "voice_storage")
 
+STT_SAMPLES_DIR = os.path.join(BASE_DIR, "stt_training_samples")
+STT_MODELS_DIR  = os.path.join(BASE_DIR, "stt_adapters_storage")
+
 # (display name, engine voice id — "f5tts:" prefix routes to the F5-TTS-Vietnamese-
 # ViVoice baseline on Colab instead of edge-TTS, see voice/tts.py). Shared across every
 # client — builtin rows carry client_id/external_user_id = NULL.
@@ -35,6 +38,15 @@ MAX_CLONED_VOICES_PER_USER = 2
 # every write, regardless of what the page's own JS already limits client-side.
 MAX_HOTWORDS_PER_ADAPTER = 200
 MAX_HOTWORD_LEN = 80
+
+# STT Lab Tier 2 (LoRA fine-tune) — this page has no API key gate (guests
+# self-register), so these caps matter more than the equivalent RVC ones:
+# real GPU training time is at stake, not just metadata storage.
+MIN_STT_TRAIN_SAMPLES = 5
+MAX_STT_TRAIN_SAMPLES = 50
+MAX_STT_SAMPLE_DURATION_SEC = 30
+MAX_STT_ADAPTERS_PER_GUEST = 3
+ALLOWED_STT_BASE_MODELS = ("whisper-tiny", "whisper-base")
 
 # First client seeded on a fresh DB — matches the app this service was extracted from.
 DEFAULT_CLIENT_NAME = "rag-legal-assistant"
@@ -196,9 +208,36 @@ def init_db():
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             guest_id      INTEGER,
             name          TEXT,
-            base_model    TEXT DEFAULT 'whisper-small',
+            base_model    TEXT DEFAULT 'whisper-tiny',
             hotwords_json TEXT DEFAULT '[]',
             created_at    REAL
+        )
+    """)
+    # Tier 2 (LoRA fine-tune) migration — existing Tier-1-only rows default to
+    # status='ready' since a hotword-only adapter is already usable as-is; they
+    # only move through training/failed once a guest actually triggers /train.
+    for stmt in (
+        "ALTER TABLE stt_adapters ADD COLUMN status TEXT DEFAULT 'ready'",
+        "ALTER TABLE stt_adapters ADD COLUMN error_message TEXT",
+        "ALTER TABLE stt_adapters ADD COLUMN progress_message TEXT",
+        "ALTER TABLE stt_adapters ADD COLUMN adapter_path TEXT",
+        "ALTER TABLE stt_adapters ADD COLUMN resume_from_path TEXT",
+        "ALTER TABLE stt_adapters ADD COLUMN backend_used TEXT",
+    ):
+        try:
+            c.execute(stmt)
+        except Exception:
+            pass
+
+    # Tier 2 training data — (audio, transcript) pairs a guest uploads to fine-tune
+    # their adapter. Separate from stt_adapters.hotwords_json (Tier 1, no audio).
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS stt_training_samples (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            adapter_id     INTEGER,
+            audio_path     TEXT,
+            reference_text TEXT,
+            created_at     REAL
         )
     """)
 
@@ -373,18 +412,25 @@ def verify_stt_guest_login(username: str, password: str):
     return {"id": row[0], "username": username}
 
 
+_STT_ADAPTER_COLUMNS = (
+    "id, guest_id, name, base_model, hotwords_json, created_at, "
+    "status, error_message, progress_message, adapter_path, resume_from_path, backend_used"
+)
+
+
 def _stt_adapter_row_to_dict(row) -> dict:
     return {
         "id": row[0], "guest_id": row[1], "name": row[2], "base_model": row[3],
         "hotwords": json.loads(row[4] or "[]"), "created_at": row[5],
+        "status": row[6], "error_message": row[7], "progress_message": row[8],
+        "adapter_path": row[9], "resume_from_path": row[10], "backend_used": row[11],
     }
 
 
 def list_stt_adapters(guest_id: int) -> list:
     conn = sqlite3.connect(DB_NAME)
     rows = conn.execute(
-        "SELECT id, guest_id, name, base_model, hotwords_json, created_at "
-        "FROM stt_adapters WHERE guest_id=? ORDER BY id ASC",
+        f"SELECT {_STT_ADAPTER_COLUMNS} FROM stt_adapters WHERE guest_id=? ORDER BY id ASC",
         (guest_id,)
     ).fetchall()
     conn.close()
@@ -394,20 +440,26 @@ def list_stt_adapters(guest_id: int) -> list:
 def get_stt_adapter(adapter_id: int):
     conn = sqlite3.connect(DB_NAME)
     row  = conn.execute(
-        "SELECT id, guest_id, name, base_model, hotwords_json, created_at "
-        "FROM stt_adapters WHERE id=?",
+        f"SELECT {_STT_ADAPTER_COLUMNS} FROM stt_adapters WHERE id=?",
         (adapter_id,)
     ).fetchone()
     conn.close()
     return _stt_adapter_row_to_dict(row) if row else None
 
 
-def create_stt_adapter(guest_id: int, name: str) -> int:
+def count_stt_adapters(guest_id: int) -> int:
+    conn = sqlite3.connect(DB_NAME)
+    n = conn.execute("SELECT COUNT(*) FROM stt_adapters WHERE guest_id=?", (guest_id,)).fetchone()[0]
+    conn.close()
+    return n
+
+
+def create_stt_adapter(guest_id: int, name: str, base_model: str = "whisper-tiny") -> int:
     conn = sqlite3.connect(DB_NAME)
     c    = conn.cursor()
     c.execute(
-        "INSERT INTO stt_adapters (guest_id, name, created_at) VALUES (?,?,?)",
-        (guest_id, name, time.time())
+        "INSERT INTO stt_adapters (guest_id, name, base_model, status, created_at) VALUES (?,?,?,?,?)",
+        (guest_id, name, base_model, "ready", time.time())
     )
     adapter_id = c.lastrowid
     conn.commit()
@@ -432,18 +484,99 @@ def update_stt_adapter_hotwords(adapter_id: int, hotwords: list):
     conn.close()
 
 
-def delete_stt_adapter(adapter_id: int):
+def update_stt_adapter_training(adapter_id: int, status: str, error_message: str = None,
+                                 progress_message: str = None, adapter_path: str = None,
+                                 backend_used: str = None):
+    """status/error_message/progress_message are always overwritten (each call
+    represents the adapter's current state); adapter_path/backend_used only
+    overwrite when actually provided, via COALESCE, so an in-progress poll
+    update doesn't erase a previous successful training run's artifact path."""
     conn = sqlite3.connect(DB_NAME)
+    conn.execute(
+        "UPDATE stt_adapters SET status=?, error_message=?, progress_message=?, "
+        "adapter_path=COALESCE(?, adapter_path), backend_used=COALESCE(?, backend_used) WHERE id=?",
+        (status, error_message, progress_message, adapter_path, backend_used, adapter_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_stt_adapter_resume_path(adapter_id: int, path: str):
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("UPDATE stt_adapters SET resume_from_path=? WHERE id=?", (path, adapter_id))
+    conn.commit()
+    conn.close()
+
+
+def add_stt_training_sample(adapter_id: int, audio_path: str, reference_text: str) -> int:
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute(
+        "INSERT INTO stt_training_samples (adapter_id, audio_path, reference_text, created_at) VALUES (?,?,?,?)",
+        (adapter_id, audio_path, reference_text, time.time())
+    )
+    sample_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return sample_id
+
+
+def _stt_sample_row_to_dict(row) -> dict:
+    return {"id": row[0], "adapter_id": row[1], "audio_path": row[2], "reference_text": row[3], "created_at": row[4]}
+
+
+def list_stt_training_samples(adapter_id: int) -> list:
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute(
+        "SELECT id, adapter_id, audio_path, reference_text, created_at "
+        "FROM stt_training_samples WHERE adapter_id=? ORDER BY id ASC",
+        (adapter_id,)
+    ).fetchall()
+    conn.close()
+    return [_stt_sample_row_to_dict(r) for r in rows]
+
+
+def get_stt_training_sample(sample_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    row = conn.execute(
+        "SELECT id, adapter_id, audio_path, reference_text, created_at FROM stt_training_samples WHERE id=?",
+        (sample_id,)
+    ).fetchone()
+    conn.close()
+    return _stt_sample_row_to_dict(row) if row else None
+
+
+def delete_stt_training_sample(sample_id: int):
+    """Caller (app.py) removes the audio file from disk first — this only
+    drops the DB row."""
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("DELETE FROM stt_training_samples WHERE id=?", (sample_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_stt_adapter(adapter_id: int):
+    """Caller (app.py) removes sample audio files + the trained adapter
+    directory from disk first — this only drops the DB rows (cascades
+    stt_training_samples)."""
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("DELETE FROM stt_training_samples WHERE adapter_id=?", (adapter_id,))
     conn.execute("DELETE FROM stt_adapters WHERE id=?", (adapter_id,))
     conn.commit()
     conn.close()
 
 
 def delete_stt_guest_account(guest_id: int):
-    """Full self-serve purge: every adapter this guest owns, then the account
-    itself — honors the commitment that a guest's data is theirs to erase
-    completely, not just disable."""
+    """Full self-serve purge: every training sample + adapter this guest owns,
+    then the account itself — honors the commitment that a guest's data is
+    theirs to erase completely, not just disable. Caller (app.py) removes
+    files from disk first (needs the paths before the rows disappear)."""
     conn = sqlite3.connect(DB_NAME)
+    conn.execute(
+        "DELETE FROM stt_training_samples WHERE adapter_id IN "
+        "(SELECT id FROM stt_adapters WHERE guest_id=?)",
+        (guest_id,)
+    )
     conn.execute("DELETE FROM stt_adapters WHERE guest_id=?", (guest_id,))
     conn.execute("DELETE FROM stt_guests WHERE id=?", (guest_id,))
     conn.commit()

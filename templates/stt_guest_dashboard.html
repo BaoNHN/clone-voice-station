@@ -31,11 +31,11 @@
   .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
   .field { display: flex; flex-direction: column; gap: 5px; }
   .field label { font-size: 15px; color: #9a9aa8; }
-  .field input {
+  .field input, .field select {
     padding: 8px 10px; border-radius: 7px; font-size: 16px; min-width: 140px;
     background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
   }
-  .field input:focus { outline: none; border-color: #6c8cff; }
+  .field input:focus, .field select:focus { outline: none; border-color: #6c8cff; }
   .field.wide input { min-width: 320px; }
 
   button.btn {
@@ -48,6 +48,11 @@
   button.btn.ghost { background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #cfcfda; }
   button.btn.ghost:hover { border-color: #6c8cff; color: #fff; }
   button.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  select.inline {
+    padding: 7px 10px; border-radius: 7px; font-size: 15px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+  }
 
   table { width: 100%; border-collapse: collapse; font-size: 16px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; }
@@ -72,6 +77,43 @@
   .toast.ok    { border-color: rgba(80,200,120,0.4); color: #6fe08a; }
 
   .empty { color: #77778a; font-size: 16px; padding: 10px 0; }
+
+  /* ── Adapter cards (Tier 1 + Tier 2) ── */
+  .adapter-card {
+    background: #17171f; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 14px;
+  }
+  .adapter-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .adapter-head .name { font-family: "SF Mono", Consolas, monospace; font-size: 16px; }
+  .tag {
+    font-size: 12.5px; padding: 2px 8px; border-radius: 999px;
+    background: rgba(150,150,170,0.15); color: #b6b6c2;
+  }
+  .status-pill { font-size: 12.5px; padding: 2px 9px; border-radius: 999px; }
+  .status-pill.ready      { background: rgba(80,200,120,0.15); color: #6fe08a; }
+  .status-pill.training   { background: rgba(255,196,0,0.15); color: #ffd25a; }
+  .status-pill.failed     { background: rgba(217,76,76,0.15); color: #ff8a8a; }
+  .progress-note { font-size: 13.5px; color: #9a9aa8; margin: 4px 0 10px; }
+  .error-note     { font-size: 13.5px; color: #ff8a8a; margin: 4px 0 10px; }
+
+  .section-label {
+    font-size: 12.5px; color: #77778a; text-transform: uppercase; letter-spacing: .03em;
+    margin: 14px 0 6px;
+  }
+  .samples-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+  .sample-row {
+    display: flex; align-items: center; gap: 8px; font-size: 14px;
+    background: #14141b; border-radius: 6px; padding: 6px 10px;
+  }
+  .sample-row .txt { flex: 1; color: #cfcfda; }
+  .sample-row button { background: transparent; border: none; color: #ff8a8a; cursor: pointer; font-size: 13px; }
+
+  .upload-row, .train-row, .continue-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .upload-row input[type="text"] {
+    flex: 1; min-width: 180px; padding: 7px 10px; border-radius: 7px; font-size: 14px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+  }
+  .actions-row { display: flex; gap: 8px; margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -90,11 +132,18 @@
 <!-- ══ Create adapter ══ -->
 <div class="card">
   <h2>➕ Tạo adapter mới</h2>
-  <p class="desc">Mỗi adapter là một danh sách từ khoá/thuật ngữ riêng (tối đa {{ max_hotwords }} từ, mỗi từ tối đa {{ max_hotword_len }} ký tự) dùng để tăng độ chính xác nhận dạng giọng nói cho các thuật ngữ của bạn.</p>
+  <p class="desc">Tier 1 (từ khoá) dùng ngay không cần huấn luyện. Tier 2 (LoRA) cần tải mẫu (audio, transcript) và bấm Huấn luyện — tối đa {{ max_stt_adapters }} adapter mỗi tài khoản.</p>
   <div class="row">
     <div class="field wide">
       <label>Tên adapter</label>
       <input type="text" id="newAdapterName" placeholder="vd: thuat-ngu-phap-ly" maxlength="100"/>
+    </div>
+    <div class="field">
+      <label>Base model (Tier 2)</label>
+      <select id="newAdapterBaseModel">
+        <option value="whisper-tiny">whisper-tiny</option>
+        <option value="whisper-base">whisper-base</option>
+      </select>
     </div>
     <button class="btn" onclick="createAdapter()">+ Tạo adapter</button>
   </div>
@@ -105,19 +154,20 @@
   <h2>📦 Adapter của bạn</h2>
   <p class="desc">Dữ liệu chỉ dùng để tinh chỉnh nhận dạng giọng nói cho chính bạn. Xoá một adapter hoặc toàn bộ tài khoản bất cứ lúc nào — dữ liệu bị xoá vĩnh viễn.</p>
   <div id="adaptersEmpty" class="empty" style="display:none;">Chưa có adapter nào — tạo một cái ở trên.</div>
-  <table id="adaptersTable" style="display:none;">
-    <thead><tr><th style="width:180px;">Tên</th><th>Từ khoá (mỗi dòng một từ)</th><th style="width:220px;"></th></tr></thead>
-    <tbody id="adaptersBody"></tbody>
-  </table>
+  <div id="adaptersList"></div>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
 const MAX_HOTWORDS = {{ max_hotwords }};
+const MAX_STT_TRAIN_SAMPLES = {{ max_stt_train_samples }};
+const MIN_STT_TRAIN_SAMPLES = {{ min_stt_train_samples }};
 // csrf_token is a secrets.token_urlsafe() value (letters/digits/-/_ only, see
 // app.py) so it's always safe to embed directly in a JS string literal here.
 const CSRF_TOKEN = "{{ csrf_token }}";
+
+let pollTimer = null;
 
 function toast(msg, kind) {
   const t = document.getElementById('toast');
@@ -143,7 +193,7 @@ function logout() {
 }
 
 async function deleteAccount() {
-  if (!confirm('Xoá vĩnh viễn tài khoản và TOÀN BỘ adapter/từ khoá của bạn? Không thể hoàn tác.')) return;
+  if (!confirm('Xoá vĩnh viễn tài khoản và TOÀN BỘ adapter/từ khoá/mẫu huấn luyện của bạn? Không thể hoàn tác.')) return;
   try {
     await api('/api/stt/account', { method: 'DELETE' });
     window.location.href = '/stt-lab/login';
@@ -154,32 +204,75 @@ function escapeHtml(s) {
   return (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+const STATUS_LABEL = { ready: 'Sẵn sàng', training: 'Đang huấn luyện', failed: 'Lỗi' };
+
+function adapterCardHTML(a) {
+  const status = a.status || 'ready';
+  return `
+    <div class="adapter-card" data-id="${a.id}">
+      <div class="adapter-head">
+        <span class="name">${escapeHtml(a.name)}</span>
+        <span class="tag">${escapeHtml(a.base_model)}</span>
+        <span class="status-pill ${status}">${STATUS_LABEL[status] || status}</span>
+        ${a.backend_used ? `<span class="tag">huấn luyện: ${escapeHtml(a.backend_used)}</span>` : ''}
+      </div>
+      ${a.progress_message && status === 'training' ? `<div class="progress-note">${escapeHtml(a.progress_message)}</div>` : ''}
+      ${a.error_message && status === 'failed' ? `<div class="error-note">${escapeHtml(a.error_message)}</div>` : ''}
+
+      <div class="section-label">Từ khoá (Tier 1)</div>
+      <textarea class="hotwords" data-id="${a.id}" rows="3">${escapeHtml((a.hotwords || []).join('\n'))}</textarea>
+      <div class="hw-count" data-count-for="${a.id}"></div>
+      <div class="actions-row">
+        <button class="btn" data-action="save-hotwords">Lưu từ khoá</button>
+      </div>
+
+      <div class="section-label">Mẫu huấn luyện (Tier 2) — <span data-sample-count="${a.id}">…</span>/${MAX_STT_TRAIN_SAMPLES}</div>
+      <div class="samples-list" data-samples-for="${a.id}"><div class="empty">Đang tải…</div></div>
+      <div class="upload-row">
+        <input type="file" class="sample-audio" data-id="${a.id}" accept="audio/*"/>
+        <input type="text" class="sample-text" data-id="${a.id}" placeholder="Transcript đúng cho mẫu này…"/>
+        <button class="btn ghost" data-action="upload-sample">+ Thêm mẫu</button>
+      </div>
+
+      <div class="train-row">
+        <select class="inline backend-select" data-id="${a.id}">
+          <option value="auto">Tự động (Colab, dự phòng Local)</option>
+          <option value="colab">Bắt buộc Colab</option>
+          <option value="local">Bắt buộc Local</option>
+        </select>
+        <button class="btn" data-action="train" ${status === 'training' ? 'disabled' : ''}>Huấn luyện</button>
+      </div>
+      <div class="continue-row">
+        <input type="file" class="continue-pack" data-id="${a.id}" accept=".zip"/>
+        <button class="btn ghost" data-action="continue">Train tiếp từ pack cũ</button>
+      </div>
+
+      <div class="actions-row">
+        <button class="btn ghost" data-action="download">Tải xuống</button>
+        <button class="btn danger" data-action="delete">Xoá adapter</button>
+      </div>
+    </div>
+  `;
+}
+
 async function loadAdapters() {
   try {
     const adapters = await api('/api/stt/adapters');
     document.getElementById('adaptersEmpty').style.display = adapters.length ? 'none' : 'block';
-    document.getElementById('adaptersTable').style.display = adapters.length ? 'table' : 'none';
-    const body = document.getElementById('adaptersBody');
-    body.innerHTML = adapters.map(a => `
-      <tr data-id="${a.id}">
-        <td class="mono">${escapeHtml(a.name)}</td>
-        <td>
-          <textarea class="hotwords" data-id="${a.id}" rows="4">${escapeHtml((a.hotwords || []).join('\n'))}</textarea>
-          <div class="hw-count" data-count-for="${a.id}"></div>
-        </td>
-        <td>
-          <button class="btn" data-action="save">Lưu từ khoá</button>
-          <button class="btn ghost" data-action="download">Tải xuống</button>
-          <button class="btn danger" data-action="delete">Xoá</button>
-        </td>
-      </tr>
-    `).join('');
-    adapters.forEach(a => updateHwCount(a.id));
+    document.getElementById('adaptersList').innerHTML = adapters.map(adapterCardHTML).join('');
+    adapters.forEach(a => {
+      updateHwCount(a.id);
+      loadSamples(a.id);
+    });
+
+    const anyTraining = adapters.some(a => a.status === 'training');
+    clearTimeout(pollTimer);
+    if (anyTraining) pollTimer = setTimeout(loadAdapters, 4000);
   } catch (e) { toast(e.message, 'error'); }
 }
 
 function updateHwCount(id) {
-  const ta = document.querySelector(`textarea[data-id="${id}"]`);
+  const ta = document.querySelector(`textarea.hotwords[data-id="${id}"]`);
   const label = document.querySelector(`[data-count-for="${id}"]`);
   if (!ta || !label) return;
   const n = ta.value.split('\n').map(s => s.trim()).filter(Boolean).length;
@@ -187,28 +280,56 @@ function updateHwCount(id) {
   label.className = 'hw-count' + (n > MAX_HOTWORDS ? ' over' : '');
 }
 
-document.getElementById('adaptersBody').addEventListener('input', (e) => {
+async function loadSamples(adapterId) {
+  try {
+    const samples = await api(`/api/stt/adapters/${adapterId}/samples`);
+    const box = document.querySelector(`[data-samples-for="${adapterId}"]`);
+    const countEl = document.querySelector(`[data-sample-count="${adapterId}"]`);
+    if (countEl) countEl.textContent = samples.length;
+    if (!box) return;
+    box.innerHTML = samples.length
+      ? samples.map(s => `
+          <div class="sample-row" data-sample-id="${s.id}">
+            <span class="txt">${escapeHtml(s.reference_text)}</span>
+            <button data-action="delete-sample" data-adapter-id="${adapterId}" data-sample-id="${s.id}">Xoá</button>
+          </div>
+        `).join('')
+      : '<div class="empty">Chưa có mẫu nào.</div>';
+  } catch (e) { /* card may have been removed by a concurrent delete */ }
+}
+
+document.getElementById('adaptersList').addEventListener('input', (e) => {
   if (e.target.matches('textarea.hotwords')) updateHwCount(Number(e.target.dataset.id));
 });
 
-document.getElementById('adaptersBody').addEventListener('click', (e) => {
+document.getElementById('adaptersList').addEventListener('click', (e) => {
+  const delBtn = e.target.closest('button[data-action="delete-sample"]');
+  if (delBtn) {
+    deleteSample(Number(delBtn.dataset.adapterId), Number(delBtn.dataset.sampleId));
+    return;
+  }
   const btn = e.target.closest('button[data-action]');
   if (!btn) return;
-  const row = btn.closest('tr');
-  const id = Number(row.dataset.id);
-  if (btn.dataset.action === 'save') saveHotwords(id);
+  const card = btn.closest('.adapter-card');
+  const id = Number(card.dataset.id);
+  const name = card.querySelector('.name').textContent;
+  if (btn.dataset.action === 'save-hotwords') saveHotwords(id);
+  else if (btn.dataset.action === 'upload-sample') uploadSample(id);
+  else if (btn.dataset.action === 'train') trainAdapter(id);
+  else if (btn.dataset.action === 'continue') continueAdapter(id);
   else if (btn.dataset.action === 'download') downloadAdapter(id);
-  else if (btn.dataset.action === 'delete') deleteAdapter(id, row.querySelector('td.mono').textContent);
+  else if (btn.dataset.action === 'delete') deleteAdapter(id, name);
 });
 
 async function createAdapter() {
   const nameEl = document.getElementById('newAdapterName');
   const name = nameEl.value.trim();
+  const baseModel = document.getElementById('newAdapterBaseModel').value;
   if (!name) return;
   try {
     await api('/api/stt/adapters', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, base_model: baseModel }),
     });
     nameEl.value = '';
     toast('Đã tạo adapter.');
@@ -217,7 +338,7 @@ async function createAdapter() {
 }
 
 async function saveHotwords(id) {
-  const ta = document.querySelector(`textarea[data-id="${id}"]`);
+  const ta = document.querySelector(`textarea.hotwords[data-id="${id}"]`);
   const hotwords = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
   try {
     await api(`/api/stt/adapters/${id}`, {
@@ -225,7 +346,59 @@ async function saveHotwords(id) {
       body: JSON.stringify({ hotwords }),
     });
     toast('Đã lưu từ khoá.');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function uploadSample(id) {
+  const audioEl = document.querySelector(`input.sample-audio[data-id="${id}"]`);
+  const textEl  = document.querySelector(`input.sample-text[data-id="${id}"]`);
+  const file = audioEl.files[0];
+  const text = textEl.value.trim();
+  if (!file) { toast('Chọn file âm thanh trước.', 'error'); return; }
+  if (!text) { toast('Nhập transcript cho mẫu này.', 'error'); return; }
+
+  const formData = new FormData();
+  formData.append('audio', file);
+  formData.append('reference_text', text);
+  try {
+    await api(`/api/stt/adapters/${id}/samples`, { method: 'POST', body: formData });
+    audioEl.value = '';
+    textEl.value = '';
+    toast('Đã thêm mẫu.');
+    loadSamples(id);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteSample(adapterId, sampleId) {
+  try {
+    await api(`/api/stt/adapters/${adapterId}/samples/${sampleId}`, { method: 'DELETE' });
+    loadSamples(adapterId);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function trainAdapter(id) {
+  const backend = document.querySelector(`select.backend-select[data-id="${id}"]`).value;
+  try {
+    await api(`/api/stt/adapters/${id}/train`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend }),
+    });
+    toast('Đã bắt đầu huấn luyện.');
     loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function continueAdapter(id) {
+  const fileEl = document.querySelector(`input.continue-pack[data-id="${id}"]`);
+  const file = fileEl.files[0];
+  if (!file) { toast('Chọn file .stt-pack.zip trước.', 'error'); return; }
+
+  const formData = new FormData();
+  formData.append('pack', file);
+  try {
+    const res = await api(`/api/stt/adapters/${id}/continue`, { method: 'POST', body: formData });
+    fileEl.value = '';
+    toast(res.message || 'Đã nạp adapter cũ.');
   } catch (e) { toast(e.message, 'error'); }
 }
 
