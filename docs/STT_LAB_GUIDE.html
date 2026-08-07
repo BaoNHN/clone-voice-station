@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>STT Lab — Hướng dẫn kiến trúc &amp; sử dụng</title>
+<title>STT Lab &amp; Voice Integration — Hướng dẫn kiến trúc &amp; các luồng sử dụng</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -49,15 +49,16 @@
 <body>
 <div class="wrap">
 
-<h1>🎙 STT Lab — Hướng dẫn kiến trúc &amp; sử dụng</h1>
-<p class="subtitle">Tài liệu mô tả toàn bộ hệ thống giọng nói (STT) trên 3 repo</p>
+<h1>🎙 STT Lab &amp; Voice Integration — Hướng dẫn kiến trúc &amp; các luồng sử dụng</h1>
+<p class="subtitle">Tài liệu mô tả toàn bộ hệ thống giọng nói trên 4 repo</p>
 
 <table>
   <thead><tr><th>Repo</th><th>Vai trò</th></tr></thead>
   <tbody>
-    <tr><td><a href="https://github.com/BaoNHN/clone-voice-station">clone-voice-station</a></td><td>Service trung tâm — training, storage, trang tự phục vụ STT Lab</td></tr>
-    <tr><td><a href="https://github.com/BaoNHN/clone-voice-clien">clone-voice-client</a></td><td>SDK Python mỏng — HTTP client + chế độ chạy Whisper cục bộ trong app</td></tr>
+    <tr><td><a href="https://github.com/BaoNHN/clone-voice-station">clone-voice-station</a></td><td>Service trung tâm — training (RVC + STT), storage, trang tự phục vụ STT Lab</td></tr>
+    <tr><td><a href="https://github.com/BaoNHN/clone-voice-client">clone-voice-client</a></td><td>SDK Python mỏng — HTTP client + chế độ chạy Whisper cục bộ trong app</td></tr>
     <tr><td><a href="https://github.com/BaoNHN/voice-lab-example">voice-lab-example</a></td><td>App ví dụ độc lập — chứng minh chế độ "chạy trong thư viện app" hoạt động thật</td></tr>
+    <tr><td><a href="https://github.com/BaoNHN/rag-legal-assistant-voice">rag-legal-assistant</a></td><td>Host app thật — trợ lý pháp lý RAG có tích hợp voice cloning (RVC) + mic live transcription</td></tr>
   </tbody>
 </table>
 
@@ -150,12 +151,60 @@ POST   /api/stt/adapters/{id}/continue   upload pack cũ để train tiếp
 
 DELETE /api/stt/account               xoá toàn bộ tài khoản + dữ liệu</code></pre>
 
-<h2>8. Giới hạn đã biết / ngoài phạm vi</h2>
+<h2>9. Luồng RVC voice cloning (<code>rag-legal-assistant</code>)</h2>
+<p>Đây là tính năng "nhân bản giọng nói" chính của thesis 24MSE23204 — khác hoàn toàn với STT Lab (STT Lab là nhận dạng giọng nói <em>đầu vào</em>; RVC là tạo giọng nói <em>đầu ra</em> mô phỏng giọng người dùng). Vào <code>/voice</code> (đã đăng nhập):</p>
+<ol>
+  <li><strong>Đồng ý xử lý dữ liệu sinh trắc học</strong> — tích checkbox trên <code>disclaimerCard</code> → <code>POST /voice/consent</code>. Nội dung gated (<code>gatedContent</code>) chỉ mở khi <code>session_info</code> trả về <code>voice_consent: true</code>.</li>
+  <li><strong>Tạo hồ sơ giọng nói</strong> — đặt tên → <code>POST /voice/profiles</code>.</li>
+  <li><strong>Ghi mẫu</strong> — mở màn ghi âm cho hồ sơ đó (<code>openRecording</code>), đọc lần lượt các đoạn kịch bản có sẵn (<code>GET /voice/scripts</code>, xem <code>voice/scripts.py</code> phía <code>clone-voice-station</code>), bấm ghi/dừng cho từng đoạn (<code>toggleRecord</code>) → mỗi đoạn tải lên <code>POST /voice/profiles/{id}/samples</code>.</li>
+  <li><strong>Huấn luyện</strong> — nút "🚀 Bắt đầu huấn luyện" chỉ bật khi đã ghi đủ tối thiểu <code>MIN_SAMPLES</code> (mặc định 5) đoạn khác nhau → <code>POST /voice/profiles/{id}/train</code>. Trang tự poll <code>GET /voice/profiles/{id}/status</code> định kỳ, hiện <code>progress_message</code> trực tiếp (vd "Đang trích xuất đặc trưng HuBERT trên cpu…") thay vì chỉ một pill trạng thái tĩnh.</li>
+  <li><strong>Dùng giọng đã train</strong> — khi <code>status = ready</code>, có thể đặt làm mặc định (<code>PUT /voice/profiles/{id}</code> với <code>is_default</code>) rồi chọn trong dropdown giọng nói ở trang chat (<code>templates/index.html</code>) để nghe câu trả lời bằng giọng đã nhân bản (<code>POST /voice/speak</code>).</li>
+  <li><strong>Phân biệt "chưa có giọng" với "dịch vụ đang down"</strong> — cả <code>index.html</code> lẫn <code>voice_profile.html</code> gọi <code>GET /voice/status</code> (health-check <code>clone-voice-station</code>) khi danh sách hồ sơ rỗng, thay vì mặc định coi rỗng = "chưa có giọng nào".</li>
+</ol>
+<p>Việc train thật sự (RVC v2: preprocess → F0 RMVPE → HuBERT → train → FAISS index) chạy trên Colab qua <code>colab/voice_server.ipynb</code>, xem mục 11 bên dưới.</p>
+
+<h2>10. Luồng mic live transcription (hỏi đáp bằng giọng nói)</h2>
+<p>Trên trang chat (<code>rag-legal-assistant</code>), nút mic bên cạnh ô nhập câu hỏi:</p>
+<ol>
+  <li>Bấm mic → trình duyệt xin quyền micro → <code>MediaRecorder</code> bắt đầu ghi theo chunk 500ms (<code>_mediaRecorder.start(500)</code>).</li>
+  <li><strong>Trong lúc vẫn đang ghi</strong>, mỗi 2.5 giây (<code>LIVE_TRANSCRIBE_INTERVAL_MS</code>) đoạn ghi âm tích luỹ được gửi lại <code>POST /voice/transcribe</code> → text hiển thị dần trong ô nhập câu hỏi, cập nhật theo thời gian thực trong lúc người dùng vẫn đang nói. Nếu người dùng tự gõ gì đó vào ô nhập giữa chừng, live-tick sẽ không ghi đè lên.</li>
+  <li>Bấm mic lần nữa để dừng ghi → gửi lần transcribe <strong>cuối cùng, có giá trị quyết định</strong> (dùng toàn bộ audio đã ghi) → điền vào ô nhập.</li>
+  <li>Không tự động gửi câu hỏi — Whisper có thể nghe nhầm thuật ngữ pháp lý, người dùng cần cơ hội xem/sửa trước khi bấm Gửi.</li>
+</ol>
+<p>Toàn bộ luồng này chỉ dùng <span class="tag">Remote</span> mode (gọi <code>clone-voice-station</code> qua HTTP) — chưa chuyển sang local mode của <code>clone-voice-client</code> (điều đó chỉ có trong <code>voice-lab-example</code>, mục 6).</p>
+
+<h2>11. Chạy Colab notebook</h2>
+<p><code>clone-voice-station/colab/</code> có 3 notebook. Cả 3 đều đã được sửa để không còn phụ thuộc <code>rvc-python</code>/fairseq (thư viện này không build được trên Python 3.11+, phiên bản runtime Colab hiện tại).</p>
+
+<h3><code>voice_server.ipynb</code> — bản đang dùng thật (production)</h3>
+<p>Notebook duy nhất phục vụ cả RVC <strong>và</strong> STT Lab Tier 2, chạy tuần tự từ trên xuống:</p>
+<ol>
+  <li>Mount Google Drive → clone RVC-Project repo + cài dependency (đã lọc bớt, không cần <code>rvc-python</code>) → kiểm tra GPU → tải model pretrained V2 (Generator/Discriminator/HuBERT/RMVPE từ HuggingFace).</li>
+  <li>Cell định nghĩa <code>train_speaker()</code> (pipeline RVC đầy đủ) + hàng đợi training RVC riêng (<code>_train_queue</code>, 1 job/lần).</li>
+  <li>Cell <code>!pip install -q peft</code> + <code>train_stt_adapter()</code> (LoRA fine-tune Whisper, Tier 2) + hàng đợi STT riêng (<code>_stt_train_queue</code>) — tách biệt khỏi hàng đợi RVC dù dùng chung 1 GPU.</li>
+  <li>(Tuỳ chọn) F5-TTS-Vietnamese-ViVoice baseline, PhoWhisper cho <code>/transcribe</code>.</li>
+  <li>Flask server khởi động — expose <code>/health /models /train /train_status/&lt;id&gt; /convert</code> (RVC) và <code>/stt_train /stt_train_status/&lt;id&gt; /stt_train/&lt;id&gt;/download</code> (STT Tier 2).</li>
+  <li>Cell cloudflared tunnel — in ra URL dạng <code>https://xxxx.trycloudflare.com</code>.</li>
+  <li><strong>Dán URL đó vào manager dashboard của <code>clone-voice-station</code></strong> (<code>/manager</code> → RVC endpoint) — cùng một endpoint được dùng cho cả RVC lẫn STT Lab Tier 2 khi guest chọn backend "Colab"/"Auto".</li>
+</ol>
+<p>Notebook phải giữ chạy liên tục — dừng/khởi động lại runtime sẽ đổi URL tunnel, phải dán lại.</p>
+
+<h3><code>train_rvc.ipynb</code> / <code>serve_rvc.ipynb</code> — bản cũ, tách rời huấn luyện/phục vụ</h3>
+<p>Hai notebook này có trước khi mọi thứ được gộp vào <code>voice_server.ipynb</code>; vẫn hữu ích khi muốn train một giọng cụ thể theo kịch bản thủ công, tách biệt khỏi service đang chạy:</p>
+<div class="card">
+  <strong><code>train_rvc.ipynb</code></strong>: sửa <code>SPEAKER_NAME</code> trong cell CONFIGURATION → mount Drive → tải audio thô lên <code>DATASET_RAW</code> trên Drive → chạy tuần tự các cell còn lại (slice/normalize → preprocess → F0 → HuBERT → filelist → train ~200 epoch, 30–60 phút trên T4 → build FAISS index → export <code>.pth</code>+<code>.index</code> vào <code>MODELS_DIR</code> trên Drive).
+</div>
+<div class="card">
+  <strong><code>serve_rvc.ipynb</code></strong>: chạy sau khi đã có <code>.pth</code>+<code>.index</code> từ <code>train_rvc.ipynb</code> (cùng <code>SPEAKER_NAME</code>) → mount Drive + clone RVC repo + cài dependency → kiểm tra GPU → khởi động Flask server (<code>/health</code>, <code>/convert</code>, shell ra <code>infer/cli.py</code> của repo thay vì gọi thẳng <code>rvc-python</code>) → cloudflared tunnel → in <code>RVC_ENDPOINT</code> để dán vào <code>.env</code>/biến môi trường của app.
+</div>
+
+<h2>12. Giới hạn đã biết / ngoài phạm vi</h2>
 <ul>
   <li>Chưa có preview WER trước/sau khi train.</li>
   <li>Upload mẫu chỉ qua file, chưa có ghi âm trực tiếp trong <code>/stt-lab</code> (chỉ <code>voice-lab-example</code> có mic UI).</li>
   <li><code>voice-lab-example</code> chưa demo Tier 2 LoRA (chỉ có sẵn hạ tầng, chưa nối UI/luồng thử).</li>
-  <li>Chưa tích hợp voice interaction vào ứng dụng chat chính (<code>rag-legal-assistant</code>) — đây vẫn là tính năng độc lập, minh hoạ qua <code>voice-lab-example</code>.</li>
+  <li>Mic live transcription trong <code>rag-legal-assistant</code> chỉ dùng remote mode — chưa chuyển sang local mode của <code>clone-voice-client</code>.</li>
+  <li><code>train_rvc.ipynb</code>/<code>serve_rvc.ipynb</code> là bản cũ (tách rời), không có route STT Lab Tier 2 — chỉ <code>voice_server.ipynb</code> có.</li>
 </ul>
 
 </div>
