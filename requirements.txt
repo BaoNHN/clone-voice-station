@@ -10,6 +10,21 @@ itsdangerous>=2.1.2
 edge-tts>=6.1.0
 requests>=2.31.0
 
+# RVC local fallback (voice/rvc_local.py) — used when the Colab endpoint above is
+# unset/unreachable, so voice conversion/training still work on this machine's own
+# GPU (if torch.cuda.is_available()) or CPU. Both run inside an isolated venv
+# rvc_local.py builds on first use (git clone of RVC-Project/Retrieval-based-Voice-
+# Conversion-WebUI + a handful of pip installs) -- needs `git` on PATH. No rvc-python
+# package here: it depends on fairseq==0.12.2, which cannot even be imported on
+# Python 3.12 (a hard language-level break in fairseq's own dataclass definitions,
+# not a version pin problem); rvc_local.py's convert_local() uses the cloned repo's
+# own infer/cli.py instead, the same fairseq-free pipeline training already uses.
+# faiss-cpu IS a direct dependency here though (not left to the cloned repo's own
+# requirements) because the isolated venv is --system-site-packages and inherits it
+# from here, and infer/cli.py/train/train_index.py both need it for the FAISS
+# retrieval index.
+faiss-cpu>=1.7.4
+
 # Manager dashboard "realism test" (engine/realism_engine.py) — speaker-embedding
 # cosine similarity between a synthesized clip and the user's own uploaded samples.
 # Pulls in torch; only imported lazily on first use, not at app.py startup.

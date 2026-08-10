@@ -11,11 +11,11 @@
     background: #16161d; color: #e8e8ec; padding: 24px 32px 60px;
   }
   header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
-  header h1 { font-size: 19px; margin: 0; }
-  header .who { font-size: 12.5px; color: #9a9aa8; }
+  header h1 { font-size: 20px; margin: 0; }
+  header .who { font-size: 15px; color: #9a9aa8; }
   header .actions button {
     background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #cfcfda;
-    padding: 6px 12px; border-radius: 7px; font-size: 12.5px; cursor: pointer; margin-left: 8px;
+    padding: 6px 12px; border-radius: 7px; font-size: 15px; cursor: pointer; margin-left: 8px;
   }
   header .actions button:hover { border-color: #6c8cff; color: #fff; }
 
@@ -23,21 +23,21 @@
     background: #1f1f29; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
     padding: 20px 22px; margin-bottom: 20px;
   }
-  .card h2 { font-size: 14.5px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
-  .card .desc { font-size: 12px; color: #9a9aa8; margin: 0 0 16px; }
+  .card h2 { font-size: 18px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+  .card .desc { font-size: 15px; color: #9a9aa8; margin: 0 0 16px; }
 
   .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
   .field { display: flex; flex-direction: column; gap: 5px; }
-  .field label { font-size: 11.5px; color: #9a9aa8; }
+  .field label { font-size: 15px; color: #9a9aa8; }
   .field input {
-    padding: 8px 10px; border-radius: 7px; font-size: 13px; min-width: 140px;
+    padding: 8px 10px; border-radius: 7px; font-size: 16px; min-width: 140px;
     background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
   }
   .field input:focus { outline: none; border-color: #6c8cff; }
   .field.wide input { min-width: 320px; }
 
   button.btn {
-    padding: 8px 14px; border: none; border-radius: 7px; font-size: 12.5px; font-weight: 600;
+    padding: 8px 14px; border: none; border-radius: 7px; font-size: 15px; font-weight: 600;
     background: #6c8cff; color: #0d0d12; cursor: pointer;
   }
   button.btn:hover { background: #86a2ff; }
@@ -47,33 +47,34 @@
   button.btn.ghost:hover { border-color: #6c8cff; color: #fff; }
   button.btn:disabled { opacity: .45; cursor: not-allowed; }
 
-  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 10px; border-radius: 999px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 15px; padding: 3px 10px; border-radius: 999px; }
   .pill.on  { background: rgba(80,200,120,0.15); color: #6fe08a; }
   .pill.off { background: rgba(217,76,76,0.15); color: #ff8a8a; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 
-  table { width: 100%; border-collapse: collapse; font-size: 12.8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 16px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); }
-  th { color: #9a9aa8; font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; }
-  td.mono { font-family: "SF Mono", Consolas, monospace; font-size: 11.5px; color: #b6b6c2; }
-  .status { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; }
+  th { color: #9a9aa8; font-weight: 500; font-size: 15px; text-transform: uppercase; letter-spacing: .03em; }
+  td.mono { font-family: "SF Mono", Consolas, monospace; font-size: 15px; color: #b6b6c2; }
+  .status { font-size: 15px; padding: 2px 8px; border-radius: 999px; }
   .status.ready      { background: rgba(80,200,120,0.15); color: #6fe08a; }
   .status.training    { background: rgba(255,196,0,0.15); color: #ffd25a; }
   .status.new,
   .status.collecting  { background: rgba(150,150,170,0.15); color: #b6b6c2; }
   .status.failed      { background: rgba(217,76,76,0.15); color: #ff8a8a; }
+  .progress-note      { font-size: 15px; color: #9a9aa8; margin-top: 3px; }
 
   .toast {
     position: fixed; bottom: 20px; right: 20px; padding: 12px 16px; border-radius: 9px;
-    background: #2a2a37; border: 1px solid rgba(255,255,255,0.12); font-size: 13px;
+    background: #2a2a37; border: 1px solid rgba(255,255,255,0.12); font-size: 16px;
     display: none; max-width: 360px;
   }
   .toast.error { border-color: rgba(217,76,76,0.4); color: #ff8a8a; }
   .toast.ok    { border-color: rgba(80,200,120,0.4); color: #6fe08a; }
 
-  .key-reveal { font-family: "SF Mono", Consolas, monospace; font-size: 11.5px; word-break: break-all; }
-  .empty { color: #77778a; font-size: 12.5px; padding: 10px 0; }
-  .advanced-toggle { font-size: 12px; color: #6c8cff; cursor: pointer; margin-top: 6px; display: inline-block; }
+  .key-reveal { font-family: "SF Mono", Consolas, monospace; font-size: 15px; word-break: break-all; }
+  .empty { color: #77778a; font-size: 16px; padding: 10px 0; }
+  .advanced-toggle { font-size: 15px; color: #6c8cff; cursor: pointer; margin-top: 6px; display: inline-block; }
   .advanced { display: none; margin-top: 10px; }
   .advanced.open { display: block; }
 
@@ -88,10 +89,10 @@
     background: #1f1f29; border: 1px solid rgba(255,255,255,0.1); border-radius: 14px;
     padding: 24px 26px; width: 100%; max-width: 620px;
   }
-  .modal h3 { margin: 0 0 4px; font-size: 16px; }
-  .modal .modal-sub { font-size: 12px; color: #9a9aa8; margin: 0 0 16px; }
+  .modal h3 { margin: 0 0 4px; font-size: 19px; }
+  .modal .modal-sub { font-size: 15px; color: #9a9aa8; margin: 0 0 16px; }
   .modal textarea {
-    width: 100%; min-height: 64px; padding: 9px 10px; border-radius: 8px; font-size: 13px;
+    width: 100%; min-height: 64px; padding: 9px 10px; border-radius: 8px; font-size: 16px;
     background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
     font-family: inherit; resize: vertical;
   }
@@ -103,13 +104,13 @@
   .score-badge {
     display: inline-flex; align-items: baseline; gap: 8px; font-size: 26px; font-weight: 700;
   }
-  .score-badge .verdict { font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+  .score-badge .verdict { font-size: 16px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
   .score-bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); margin: 10px 0 4px; overflow: hidden; }
   .score-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #d94c4c, #ffd25a, #6fe08a); }
-  .score-hint { font-size: 11.5px; color: #77778a; }
+  .score-hint { font-size: 15px; color: #77778a; }
 
   .synth-player { margin-top: 14px; }
-  .synth-player label, .samples-list-label { font-size: 11.5px; color: #9a9aa8; display: block; margin-bottom: 6px; }
+  .synth-player label, .samples-list-label { font-size: 15px; color: #9a9aa8; display: block; margin-bottom: 6px; }
   audio { width: 100%; height: 34px; }
 
   .sample-row {
@@ -118,7 +119,7 @@
   }
   .sample-row:last-child { border-bottom: none; }
   .sample-row audio { flex: 1; }
-  .sample-row .pair-score { font-size: 12.5px; font-weight: 600; min-width: 46px; text-align: right; }
+  .sample-row .pair-score { font-size: 16px; font-weight: 600; min-width: 46px; text-align: right; }
   .samples-list { margin-top: 18px; }
 
   .spinner-inline {
@@ -205,13 +206,49 @@
   <h2>🗂️ Toàn bộ giọng nói (mọi client)</h2>
   <p class="desc">Mỗi giọng nhân bản đã tạo, bất kể thuộc client nào — huấn luyện lại / vô hiệu hoá / xoá trực tiếp.</p>
 
-  <table>
-    <thead>
-      <tr><th>ID</th><th>Tên</th><th>Client</th><th>Trạng thái</th><th>Mẫu</th><th>Speaker ID</th><th></th></tr>
-    </thead>
-    <tbody id="profilesBody"></tbody>
-  </table>
+  <div class="row">
+    <div class="field">
+      <label>Tìm theo tên</label>
+      <input type="text" id="profileSearchName" placeholder="Tên giọng nói…" oninput="onProfileFilterChange()"/>
+    </div>
+    <div class="field">
+      <label>Tìm theo client</label>
+      <input type="text" id="profileSearchClient" placeholder="Tên client…" oninput="onProfileFilterChange()"/>
+    </div>
+  </div>
+
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Tên</th><th>Client</th><th>Trạng thái</th><th>Mẫu</th><th>Speaker ID</th><th></th></tr>
+      </thead>
+      <tbody id="profilesBody"></tbody>
+    </table>
+  </div>
   <div class="empty" id="profilesEmpty" style="display:none;">Chưa có giọng nói nào được tạo.</div>
+
+  <div class="row" id="profilesPagination" style="margin-top:14px; align-items:center;">
+    <button class="btn ghost" id="profilesPrevBtn" onclick="changeProfilesPage(-1)">‹ Trước</button>
+    <span id="profilesPageInfo" style="font-size:15px;color:#9a9aa8;"></span>
+    <button class="btn ghost" id="profilesNextBtn" onclick="changeProfilesPage(1)">Sau ›</button>
+  </div>
+</div>
+
+<!-- ══ Server Log ══ -->
+<div class="card">
+  <h2>📋 Nhật ký hệ thống</h2>
+  <p class="desc">Sự kiện của ứng dụng — huấn luyện, chuyển đổi giọng nói, dùng máy chủ cục bộ thay Colab, lỗi.
+    Không phải log truy cập HTTP (mỗi request), tự làm mới mỗi 5 giây.</p>
+  <div class="row" style="margin-bottom:8px; align-items:center;">
+    <button class="btn ghost" onclick="loadServerLogs()">↺ Làm mới ngay</button>
+    <label style="display:flex; align-items:center; gap:6px; font-size:15px; color:#9a9aa8; cursor:pointer;">
+      <input type="checkbox" id="logAutoScroll" checked/> Tự động cuộn xuống cuối
+    </label>
+  </div>
+  <pre id="serverLogBox" style="background:#14141b; border:1px solid rgba(255,255,255,0.12);
+       border-radius:8px; padding:12px; height:320px; overflow-y:auto; font-size:13px;
+       line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0;
+       font-family:'SF Mono', Consolas, monospace; color:#cfcfda;"></pre>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -426,34 +463,96 @@ function statusLabel(s) {
   return { new: 'Mới', collecting: 'Đang thu âm', training: 'Đang huấn luyện', ready: 'Sẵn sàng', failed: 'Lỗi' }[s] || s;
 }
 
+function truncateWords(s, maxWords) {
+  const words = (s || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return s || '';
+  return words.slice(0, maxWords).join(' ') + '…';
+}
+
+const PROFILES_PAGE_SIZE = 15;
+let profilesPollTimer = null;
+let allProfiles = [];
+let profilesPage = 1;
+
 async function loadProfiles() {
   try {
-    const profiles = await api('/manager/profiles');
-    const body = document.getElementById('profilesBody');
-    document.getElementById('profilesEmpty').style.display = profiles.length ? 'none' : 'block';
-    // data-* attributes only -- p.name is set by an end-user of any client app via
-    // POST /api/profiles (the lowest-trust actor in the system); never interpolate it
-    // into an onclick="..." attribute, see loadClients() above for why that's unsafe
-    // even after HTML-escaping.
-    body.innerHTML = profiles.map(p => {
-      const canRetrain = p.sample_count >= MIN_SAMPLES && p.status !== 'training';
-      return `
+    allProfiles = await api('/manager/profiles');
+    renderProfilesTable();
+
+    // Auto-refresh while any profile is training, so progress_message (and the
+    // eventual ready/failed transition) show up without a manual page reload.
+    // Self-rescheduling setTimeout rather than setInterval so a slow request
+    // can't stack overlapping polls.
+    clearTimeout(profilesPollTimer);
+    if (allProfiles.some(p => p.status === 'training')) {
+      profilesPollTimer = setTimeout(loadProfiles, 5000);
+    }
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function onProfileFilterChange() {
+  profilesPage = 1;
+  renderProfilesTable();
+}
+
+function changeProfilesPage(delta) {
+  profilesPage += delta;
+  renderProfilesTable();
+}
+
+function renderProfilesTable() {
+  const nameQuery   = document.getElementById('profileSearchName').value.trim().toLowerCase();
+  const clientQuery = document.getElementById('profileSearchClient').value.trim().toLowerCase();
+
+  const filtered = allProfiles.filter(p =>
+    (!nameQuery   || (p.name || '').toLowerCase().includes(nameQuery)) &&
+    (!clientQuery || (p.client_name || '').toLowerCase().includes(clientQuery))
+  );
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PROFILES_PAGE_SIZE));
+  profilesPage = Math.min(Math.max(1, profilesPage), totalPages);
+  const pageItems = filtered.slice((profilesPage - 1) * PROFILES_PAGE_SIZE, profilesPage * PROFILES_PAGE_SIZE);
+
+  const body = document.getElementById('profilesBody');
+  document.getElementById('profilesEmpty').style.display = allProfiles.length ? 'none' : 'block';
+  document.getElementById('profilesPagination').style.display = filtered.length ? 'flex' : 'none';
+  document.getElementById('profilesPageInfo').textContent =
+    `Trang ${profilesPage}/${totalPages} (${filtered.length} giọng nói)`;
+  document.getElementById('profilesPrevBtn').disabled = profilesPage <= 1;
+  document.getElementById('profilesNextBtn').disabled = profilesPage >= totalPages;
+
+  // data-* attributes only -- p.name is set by an end-user of any client app via
+  // POST /api/profiles (the lowest-trust actor in the system); never interpolate it
+  // into an onclick="..." attribute, see loadClients() above for why that's unsafe
+  // even after HTML-escaping.
+  body.innerHTML = pageItems.map(p => {
+    const canRetrain = p.sample_count >= MIN_SAMPLES && p.status !== 'training';
+    // Status text is capped at 10 words (manager's request -- long Colab/local
+    // progress messages were pushing the action buttons in the last column onto
+    // their own line); the full text is still available in the title tooltip.
+    const detail = p.status === 'training' ? p.progress_message : p.error_message;
+    const detailShort = detail ? truncateWords(detail, 10) : '';
+    return `
       <tr data-id="${p.id}" data-name="${escapeHtml(p.name)}">
         <td>${p.id}</td>
         <td>${escapeHtml(p.name)}</td>
         <td>${escapeHtml(p.client_name)}</td>
-        <td><span class="status ${p.status}">${statusLabel(p.status)}</span>${p.error_message ? ' — ' + escapeHtml(p.error_message) : ''}</td>
+        <td>
+          <span class="status ${p.status}">${statusLabel(p.status)}</span>
+          ${detailShort ? `<div class="progress-note" title="${escapeHtml(detail)}">${escapeHtml(detailShort)}</div>` : ''}
+        </td>
         <td>${p.sample_count}</td>
         <td class="mono">${escapeHtml(p.speaker_id || '—')}</td>
         <td>
-          <button class="btn ghost" data-action="retrain" ${canRetrain ? '' : 'disabled'}>Huấn luyện lại</button>
-          <button class="btn ghost" data-action="realism-test" ${p.status === 'ready' ? '' : 'disabled'}>🎯 Test độ giống</button>
-          <button class="btn ghost" data-action="disable">Vô hiệu hoá</button>
-          <button class="btn danger" data-action="remove">Xoá</button>
+          <div style="display:flex; flex-wrap:nowrap; gap:6px;">
+            <button class="btn ghost" data-action="retrain" ${canRetrain ? '' : 'disabled'}>Huấn luyện lại</button>
+            <button class="btn ghost" data-action="realism-test" ${p.status === 'ready' ? '' : 'disabled'}>🎯 Test độ giống</button>
+            <button class="btn ghost" data-action="disable">Vô hiệu hoá</button>
+            <button class="btn danger" data-action="remove">Xoá</button>
+          </div>
         </td>
       </tr>`;
-    }).join('');
-  } catch (e) { toast(e.message, 'error'); }
+  }).join('');
 }
 
 document.getElementById('profilesBody').addEventListener('click', (e) => {
@@ -529,7 +628,7 @@ async function loadRealismSamples(id) {
     }
     body.innerHTML = samples.map(s => `
       <div class="sample-row" data-sample-id="${s.id}">
-        <span style="min-width:70px;font-size:12px;color:#9a9aa8;">${escapeHtml(s.script_id)}</span>
+        <span style="min-width:70px;font-size:15px;color:#9a9aa8;">${escapeHtml(s.script_id)}</span>
         <audio controls preload="none" src="/manager/profiles/${id}/samples/${s.id}/audio"></audio>
         <span class="pair-score" data-role="pair-score">—</span>
       </div>
@@ -598,9 +697,25 @@ async function runRealismTest() {
   }
 }
 
+// ── Server log ────────────────────────────────────────────────────────────────
+async function loadServerLogs() {
+  try {
+    const data = await api('/manager/logs');
+    const box = document.getElementById('serverLogBox');
+    const wasAtBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
+    box.textContent = (data.lines || []).join('\n') || '(chưa có sự kiện nào)';
+    if (document.getElementById('logAutoScroll').checked && (wasAtBottom || box.dataset.firstLoad !== 'done')) {
+      box.scrollTop = box.scrollHeight;
+    }
+    box.dataset.firstLoad = 'done';
+  } catch (e) { toast(e.message, 'error'); }
+}
+setInterval(loadServerLogs, 5000);
+
 loadRvcConfig();
 loadClients();
 loadProfiles();
+loadServerLogs();
 </script>
 </body>
 </html>

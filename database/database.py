@@ -42,8 +42,22 @@ MAX_HOTWORD_LEN = 80
 # STT Lab Tier 2 (LoRA fine-tune) — this page has no API key gate (guests
 # self-register), so these caps matter more than the equivalent RVC ones:
 # real GPU training time is at stake, not just metadata storage.
-MIN_STT_TRAIN_SAMPLES = 5
-MAX_STT_TRAIN_SAMPLES = 50
+# Raised from 5: measured directly (see tools/import_hf_stt_dataset.py's medical-
+# consultation experiment) that a handful of clips next to Whisper's own pretraining
+# corpus (hundreds of thousands of hours) can only overfit, not meaningfully adapt --
+# voice/stt_local_train.py's validation gate would just reject these every time anyway,
+# wasting real GPU time on a run that was never going to ship. Below this, Tier 1's
+# hotword prompt-bias (update_stt_adapter_hotwords) is the right tool instead: biasing
+# a few proper nouns/terms needs no training data minimum at all.
+MIN_STT_TRAIN_SAMPLES = 10
+# Raised from 50: a guest who registers an account is training their own adapter with
+# their own uploaded data, not an anonymous drive-by request, so the old "few personal
+# hotwords" ceiling was mainly just capping quality for domain-adaptation use cases (e.g.
+# tools/import_hf_stt_dataset.py importing a real ASR dataset) without a corresponding
+# abuse benefit. 500 covers a full-size dataset split (this dataset's train split is 460
+# rows) with headroom, while MAX_STT_ADAPTERS_PER_GUEST below still bounds how many such
+# training runs one guest can rack up.
+MAX_STT_TRAIN_SAMPLES = 500
 MAX_STT_SAMPLE_DURATION_SEC = 30
 MAX_STT_ADAPTERS_PER_GUEST = 3
 ALLOWED_STT_BASE_MODELS = ("whisper-tiny", "whisper-base")
@@ -688,7 +702,7 @@ def list_voice_profiles(client_id: int, external_user_id: str):
     c    = conn.cursor()
     c.execute(
         "SELECT id, client_id, external_user_id, name, kind, base_tts_voice, speaker_id, "
-        "status, is_default, error_message, model_local_path "
+        "status, is_default, error_message, model_local_path, progress_message "
         "FROM voice_profiles WHERE kind='builtin' OR (client_id=? AND external_user_id=?) "
         "ORDER BY kind DESC, id ASC",
         (client_id, external_user_id)
@@ -711,6 +725,7 @@ def _voice_profile_row_to_dict(r):
         "is_default":       bool(r[8]),
         "error_message":    r[9],
         "model_local_path": r[10],
+        "progress_message": r[11],
     }
 
 
@@ -718,7 +733,7 @@ def get_voice_profile(profile_id: int):
     conn = sqlite3.connect(DB_NAME)
     row  = conn.execute(
         "SELECT id, client_id, external_user_id, name, kind, base_tts_voice, speaker_id, "
-        "status, is_default, error_message, model_local_path "
+        "status, is_default, error_message, model_local_path, progress_message "
         "FROM voice_profiles WHERE id=?",
         (profile_id,)
     ).fetchone()
@@ -776,7 +791,8 @@ def set_default_voice_profile(client_id: int, external_user_id: str, profile_id:
 
 
 def update_voice_profile_status(profile_id: int, status: str, speaker_id: str = None,
-                                 error_message: str = None, model_local_path: str = None):
+                                 error_message: str = None, model_local_path: str = None,
+                                 progress_message: str = None):
     conn = sqlite3.connect(DB_NAME)
     c    = conn.cursor()
 
@@ -788,6 +804,13 @@ def update_voice_profile_status(profile_id: int, status: str, speaker_id: str = 
     if model_local_path is not None:
         fields.append("model_local_path=?")
         params.append(model_local_path)
+    # Unlike error_message (always overwritten -- a fresh status implies any old
+    # error is stale), progress_message is only touched when the caller actually
+    # has something new to report, since most status transitions (e.g. the final
+    # "ready"/"failed") don't pass one and shouldn't blank out the last step shown.
+    if progress_message is not None:
+        fields.append("progress_message=?")
+        params.append(progress_message)
     fields.append("error_message=?")
     params.append(error_message)
     params.append(profile_id)
@@ -826,6 +849,7 @@ def list_all_voice_profiles(client_id: int):
     c.execute("""
         SELECT vp.id, vp.client_id, vp.external_user_id, vp.name, vp.kind, vp.base_tts_voice,
                vp.speaker_id, vp.status, vp.is_default, vp.error_message, vp.model_local_path,
+               vp.progress_message,
                (SELECT COUNT(*) FROM voice_samples vs WHERE vs.profile_id = vp.id)
         FROM voice_profiles vp
         WHERE vp.kind='cloned' AND vp.client_id=?
@@ -835,8 +859,8 @@ def list_all_voice_profiles(client_id: int):
     conn.close()
     result = []
     for r in rows:
-        d = _voice_profile_row_to_dict(r[:11])
-        d["sample_count"] = r[11]
+        d = _voice_profile_row_to_dict(r[:12])
+        d["sample_count"] = r[12]
         result.append(d)
     return result
 
@@ -849,6 +873,7 @@ def list_all_voice_profiles_global():
     c.execute("""
         SELECT vp.id, vp.client_id, vp.external_user_id, vp.name, vp.kind, vp.base_tts_voice,
                vp.speaker_id, vp.status, vp.is_default, vp.error_message, vp.model_local_path,
+               vp.progress_message,
                (SELECT COUNT(*) FROM voice_samples vs WHERE vs.profile_id = vp.id),
                cl.name
         FROM voice_profiles vp
@@ -860,9 +885,9 @@ def list_all_voice_profiles_global():
     conn.close()
     result = []
     for r in rows:
-        d = _voice_profile_row_to_dict(r[:11])
-        d["sample_count"] = r[11]
-        d["client_name"]  = r[12] or "(đã xoá)"
+        d = _voice_profile_row_to_dict(r[:12])
+        d["sample_count"] = r[12]
+        d["client_name"]  = r[13] or "(đã xoá)"
         result.append(d)
     return result
 

@@ -1,7 +1,12 @@
 """
 voice/rvc_client.py
-HTTP client for the RVC voice-conversion + training server that runs on
-Google Colab (see colab/voice_server.ipynb), exposed via a cloudflared tunnel.
+Client for the RVC voice-conversion + training service. Primary backend is
+the server that runs on Google Colab (see colab/voice_server.ipynb), reached
+over HTTP through a cloudflared tunnel. When that endpoint is unset or
+unreachable, convert() and train_local() (used by engine/voice_engine.py) fall
+back to voice/rvc_local.py, which runs the same pipeline on this machine's own
+GPU (if present) or CPU — so voice cloning keeps working without a Colab
+session running, just slower and (for training) at lower quality on CPU.
 
 The tunnel URL and every tuning knob below (pitch, index_rate, timeouts) are
 read from the settings DB table — editable live from the manager dashboard
@@ -12,12 +17,16 @@ as the seed default the first time each setting is read (see database.database
 unreachable.
 
 All functions degrade gracefully (return "unavailable"/original audio) when
-the endpoint is unset or unreachable — voice playback must keep working with
-plain TTS even when no Colab session is running.
+the endpoint is unset or unreachable *and* the local fallback also has no
+usable model — voice playback must keep working with plain TTS even then.
 """
 
 import os
 import requests
+
+from engine.server_log import get_logger
+
+logger = get_logger()
 
 from database.database import get_setting
 
@@ -67,31 +76,61 @@ def is_available() -> bool:
 def convert(audio_bytes: bytes, speaker_id: str, pitch: int = None,
             index_rate: float = None, mime: str = "audio/mp3") -> bytes:
     """
-    Sends TTS audio to the Colab RVC server for conversion into the given
-    speaker's cloned voice. Falls back to the original (unconverted) audio if
-    the endpoint is unset, unreachable, or the model isn't ready yet.
+    Sends TTS audio for conversion into the given speaker's cloned voice —
+    tries the Colab RVC server first, then this machine's own GPU/CPU
+    (voice/rvc_local.py) if Colab is unset/unreachable/errors. Falls back to
+    the original (unconverted) audio if neither backend has a usable model
+    for this speaker yet.
     """
     endpoint = get_endpoint()
-    if not endpoint:
-        return audio_bytes
-
     pitch      = get_pitch() if pitch is None else pitch
     index_rate = get_index_rate() if index_rate is None else index_rate
 
+    if endpoint:
+        try:
+            resp = requests.post(
+                f"{endpoint}/convert",
+                files={"audio": ("input.mp3", audio_bytes, mime)},
+                data={"speaker_id": speaker_id, "pitch": pitch, "index_rate": index_rate},
+                timeout=get_timeout("convert"),
+            )
+            if resp.status_code == 200:
+                return resp.content
+            logger.warning(f"[RVC] /convert returned {resp.status_code} — trying local fallback.")
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"[RVC] Endpoint unreachable ({e}) — trying local fallback.")
+
+    local_result = _convert_local(audio_bytes, speaker_id, pitch, index_rate, mime)
+    if local_result is not None:
+        return local_result
+
+    logger.warning(f"[RVC] No Colab and no local model for {speaker_id} — falling back to TTS audio.")
+    return audio_bytes
+
+
+def _convert_local(audio_bytes: bytes, speaker_id: str, pitch: int,
+                    index_rate: float, mime: str) -> bytes | None:
+    """Local import: keeps voice/rvc_local.py (and its torch/rvc-python
+    dependency) optional for a deployment that always has Colab available."""
     try:
-        resp = requests.post(
-            f"{endpoint}/convert",
-            files={"audio": ("input.mp3", audio_bytes, mime)},
-            data={"speaker_id": speaker_id, "pitch": pitch, "index_rate": index_rate},
-            timeout=get_timeout("convert"),
-        )
-        if resp.status_code == 200:
-            return resp.content
-        print(f"[RVC] /convert returned {resp.status_code} — falling back to TTS audio.")
-        return audio_bytes
-    except requests.exceptions.RequestException as e:
-        print(f"[RVC] Endpoint unreachable ({e}) — falling back to TTS audio.")
-        return audio_bytes
+        from voice import rvc_local
+        return rvc_local.convert_local(audio_bytes, speaker_id, pitch=pitch,
+                                        index_rate=index_rate, mime=mime)
+    except Exception as e:
+        logger.warning(f"[RVC] Local fallback unavailable for {speaker_id}: {e}")
+        return None
+
+
+def train_local(speaker_id: str, samples: list, progress_cb=None) -> tuple[str, str]:
+    """
+    Runs RVC training on this machine's own GPU (if present) or CPU instead of
+    Colab — see voice/rvc_local.py for the actual pipeline. Used by
+    engine/voice_engine.py's run_training() when start_train() reports Colab
+    is unset/unreachable. Raises on failure; caller is responsible for turning
+    that into a "failed" profile status, same as a failed Colab job.
+    """
+    from voice import rvc_local
+    return rvc_local.train_speaker_local(speaker_id, samples, progress_cb=progress_cb)
 
 
 def start_train(speaker_id: str, samples: list) -> dict:
@@ -151,10 +190,10 @@ def download_model(speaker_id: str) -> bytes:
         resp = requests.get(f"{endpoint}/models/{speaker_id}/download", timeout=get_timeout("download"))
         if resp.status_code == 200:
             return resp.content
-        print(f"[RVC] /models/{speaker_id}/download returned {resp.status_code}")
+        logger.warning(f"[RVC] /models/{speaker_id}/download returned {resp.status_code}")
         return None
     except requests.exceptions.RequestException as e:
-        print(f"[RVC] Model download failed for {speaker_id}: {e}")
+        logger.warning(f"[RVC] Model download failed for {speaker_id}: {e}")
         return None
 
 
@@ -189,10 +228,10 @@ def synthesize_f5tts(gen_text: str, ref_audio_bytes: bytes = None, ref_text: str
         )
         if resp.status_code == 200:
             return resp.content
-        print(f"[F5-TTS] /baseline/f5tts returned {resp.status_code} — falling back to edge-TTS.")
+        logger.warning(f"[F5-TTS] /baseline/f5tts returned {resp.status_code} — falling back to edge-TTS.")
         return None
     except requests.exceptions.RequestException as e:
-        print(f"[F5-TTS] Endpoint unreachable ({e}) — falling back to edge-TTS.")
+        logger.warning(f"[F5-TTS] Endpoint unreachable ({e}) — falling back to edge-TTS.")
         return None
 
 
@@ -218,10 +257,10 @@ def transcribe_remote(audio_bytes: bytes, mime: str = "audio/webm", language: st
         )
         if resp.status_code == 200:
             return resp.json()
-        print(f"[STT] /transcribe returned {resp.status_code} — falling back to local Whisper.")
+        logger.warning(f"[STT] /transcribe returned {resp.status_code} — falling back to local Whisper.")
         return None
     except requests.exceptions.RequestException as e:
-        print(f"[STT] Endpoint unreachable ({e}) — falling back to local Whisper.")
+        logger.warning(f"[STT] Endpoint unreachable ({e}) — falling back to local Whisper.")
         return None
 
 

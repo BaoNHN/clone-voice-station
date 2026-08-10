@@ -8,3 +8,8 @@ session_secret.txt
 __pycache__/
 *.pyc
 *.pyo
+/bin/
+/local_rvc/
+/server.log*
+/stt_general_benchmark/
+/tools/medical_eval_set/

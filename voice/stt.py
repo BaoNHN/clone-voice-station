@@ -17,6 +17,19 @@ binary on PATH, same requirement already documented for realism_engine.
 import os
 import tempfile
 
+from engine.server_log import get_logger
+
+logger = get_logger()
+
+# Bundled static ffmpeg (see bin/, gitignored) — prefer this over whatever's on
+# PATH. The conda-forge ffmpeg package in rag_env fails to launch on this
+# machine (STATUS_ENTRYPOINT_NOT_FOUND, a DLL conflict with its dynamically-
+# linked build); this static build sidesteps that. Falls back to PATH's
+# ffmpeg if the bundled binary isn't present (e.g. a different deployment).
+_BUNDLED_FFMPEG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin")
+if os.path.isfile(os.path.join(_BUNDLED_FFMPEG_DIR, "ffmpeg.exe")):
+    os.environ["PATH"] = _BUNDLED_FFMPEG_DIR + os.pathsep + os.environ.get("PATH", "")
+
 _model = None
 _MODEL_SIZE = os.getenv("WHISPER_MODEL", "small")  # tiny | base | small | medium
 
@@ -35,9 +48,9 @@ def _load_model():
     global _model
     if _model is None:
         import whisper
-        print(f"[STT] Loading Whisper-{_MODEL_SIZE} …")
+        logger.info(f"[STT] Loading Whisper-{_MODEL_SIZE} …")
         _model = whisper.load_model(_MODEL_SIZE)
-        print("[STT] Whisper ready.")
+        logger.info("[STT] Whisper ready.")
     return _model
 
 

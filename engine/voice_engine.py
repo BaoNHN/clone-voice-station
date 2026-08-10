@@ -13,6 +13,9 @@ Orchestrates the two voice features this service exposes to its clients:
   2. run_training()  — background job (called via FastAPI BackgroundTasks)
                        that uploads a profile's recorded samples to the Colab
                        RVC server and polls until the trained model is ready.
+                       Falls back to training on this machine's own GPU/CPU
+                       (voice/rvc_local.py, via rvc_client.train_local()) when
+                       Colab is unset/unreachable.
 
 Profile status lives in the voice_profiles DB row (not a separate in-memory
 job store) so a client app can just poll GET /api/profiles/{id}/status.
@@ -30,6 +33,9 @@ from voice import tts, rvc_client
 from database.database import (
     get_voice_profile, list_voice_samples, update_voice_profile_status, VOICE_MODELS_DIR,
 )
+from engine.server_log import get_logger
+
+logger = get_logger()
 
 POLL_INTERVAL_SEC = 15
 MAX_TRAIN_WAIT_SEC = 2 * 60 * 60  # 2 hours
@@ -132,17 +138,37 @@ def run_training(profile_id: int, min_samples: int):
         return
 
     speaker_id = _speaker_id_for(profile_id, profile["client_id"], profile["external_user_id"])
-    update_voice_profile_status(profile_id, "training", speaker_id=speaker_id)
+    update_voice_profile_status(profile_id, "training", speaker_id=speaker_id, progress_message="Đang bắt đầu…")
 
     result = rvc_client.start_train(speaker_id, sample_files)
-    if result.get("status") not in ("queued", "running", "accepted"):
-        update_voice_profile_status(
-            profile_id, "failed", speaker_id=speaker_id,
-            error_message=result.get("message", "Không thể bắt đầu huấn luyện trên Colab.")
-        )
+    if result.get("status") in ("queued", "running", "accepted"):
+        _poll_until_done(profile_id, speaker_id)
         return
 
-    _poll_until_done(profile_id, speaker_id)
+    # Colab unset/unreachable/errored -- train on this machine's own GPU/CPU instead
+    # (see voice/rvc_local.py). Unlike the Colab path, this runs synchronously right
+    # here (already inside the BackgroundTasks thread) rather than via queue + poll.
+    logger.info(f"[Voice] Colab unavailable for {speaker_id} ({result.get('message')}) — training locally.")
+    update_voice_profile_status(
+        profile_id, "training", speaker_id=speaker_id,
+        progress_message="Colab không khả dụng — đang huấn luyện trên máy chủ cục bộ…"
+    )
+
+    def _report_progress(msg: str):
+        update_voice_profile_status(profile_id, "training", speaker_id=speaker_id, progress_message=msg)
+
+    try:
+        model_pth, _ = rvc_client.train_local(speaker_id, sample_files, progress_cb=_report_progress)
+        update_voice_profile_status(
+            profile_id, "ready", speaker_id=speaker_id, model_local_path=os.path.dirname(model_pth),
+            progress_message="Hoàn tất."
+        )
+    except Exception as e:
+        logger.error(f"[Voice] Local training failed for {speaker_id}: {e}")
+        update_voice_profile_status(
+            profile_id, "failed", speaker_id=speaker_id,
+            error_message=f"Không thể huấn luyện (Colab và máy chủ cục bộ đều không khả dụng): {e}"
+        )
 
 
 def _download_and_store_model(speaker_id: str) -> str:
@@ -154,7 +180,7 @@ def _download_and_store_model(speaker_id: str) -> str:
     """
     zip_bytes = rvc_client.download_model(speaker_id)
     if not zip_bytes:
-        print(f"[Voice] No local backup for {speaker_id} (Colab unreachable or model missing) — still usable via Colab.")
+        logger.info(f"[Voice] No local backup for {speaker_id} (Colab unreachable or model missing) — still usable via Colab.")
         return ""
 
     model_dir = os.path.join(VOICE_MODELS_DIR, speaker_id)
@@ -164,7 +190,7 @@ def _download_and_store_model(speaker_id: str) -> str:
             zf.extractall(model_dir)
         return model_dir
     except zipfile.BadZipFile as e:
-        print(f"[Voice] Corrupt model archive for {speaker_id}: {e}")
+        logger.error(f"[Voice] Corrupt model archive for {speaker_id}: {e}")
         return ""
 
 
@@ -189,6 +215,12 @@ def _poll_until_done(profile_id: int, speaker_id: str):
                 error_message=status.get("message", "Huấn luyện thất bại trên Colab.")
             )
             return
+        if state in ("queued", "running") and status.get("message"):
+            # Surface Colab's own progress message (see colab/voice_server.ipynb's
+            # TRAIN_JOBS store) so the frontend isn't blind while this loop polls.
+            update_voice_profile_status(
+                profile_id, "training", speaker_id=speaker_id, progress_message=status["message"]
+            )
         if state == "unavailable":
             update_voice_profile_status(
                 profile_id, "failed", speaker_id=speaker_id,
