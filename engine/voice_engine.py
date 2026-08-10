@@ -38,6 +38,14 @@ from engine.server_log import get_logger
 logger = get_logger()
 
 POLL_INTERVAL_SEC = 15
+# Tolerance for transient network failures while polling (see rvc_client.train_status()'s
+# "network_error" status) before giving up on an otherwise-still-running job -- confirmed
+# for real that heavy GPU training work on the Colab VM can make cloudflared itself briefly
+# unresponsive well within a single poll's own timeout, unrelated to whether training is
+# actually still progressing. 20 * POLL_INTERVAL_SEC = 5 minutes of sustained
+# unreachability, comfortably past what a compute-load blip has been observed to cause,
+# while still giving up in finite time if the Colab session is genuinely gone for good.
+MAX_CONSECUTIVE_NETWORK_ERRORS = 20
 MAX_TRAIN_WAIT_SEC = 2 * 60 * 60  # 2 hours
 
 # Vietnam's AI Law (134/2025/QH15) requires that audio simulating/impersonating a real
@@ -196,12 +204,28 @@ def _download_and_store_model(speaker_id: str) -> str:
 
 def _poll_until_done(profile_id: int, speaker_id: str):
     waited = 0
+    consecutive_network_errors = 0
     while waited < MAX_TRAIN_WAIT_SEC:
         time.sleep(POLL_INTERVAL_SEC)
         waited += POLL_INTERVAL_SEC
 
         status = rvc_client.train_status(speaker_id)
         state  = status.get("status")
+
+        if state == "network_error":
+            consecutive_network_errors += 1
+            logger.info(
+                f"[Voice] Poll for {speaker_id} couldn't reach Colab "
+                f"({consecutive_network_errors}/{MAX_CONSECUTIVE_NETWORK_ERRORS}): {status.get('message')}"
+            )
+            if consecutive_network_errors >= MAX_CONSECUTIVE_NETWORK_ERRORS:
+                update_voice_profile_status(
+                    profile_id, "failed", speaker_id=speaker_id,
+                    error_message="Mất kết nối tới Colab quá lâu trong khi huấn luyện."
+                )
+                return
+            continue
+        consecutive_network_errors = 0
 
         if state in ("done", "ready"):
             model_local_path = _download_and_store_model(speaker_id)

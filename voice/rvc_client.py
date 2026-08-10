@@ -171,7 +171,15 @@ def train_status(speaker_id: str) -> dict:
             return resp.json()
         return {"status": "error", "message": f"HTTP {resp.status_code}"}
     except requests.exceptions.RequestException as e:
-        return {"status": "error", "message": str(e)}
+        # Distinct from "error" above -- confirmed for real that a real training run (heavy
+        # GPU work occupying the Colab VM) can make cloudflared itself briefly unresponsive
+        # (a "Cloudflare Tunnel error 1033" page instead of a response) well within this
+        # call's own 5s timeout, even though training keeps running on Colab regardless of
+        # whether this one poll got through. _poll_until_done() tolerates a run of these
+        # before giving up; "error" (a real HTTP response, just not 200) and "unavailable"
+        # (no endpoint configured at all) still fail immediately, same as before -- only a
+        # network-level failure to even reach the endpoint gets this leniency.
+        return {"status": "network_error", "message": str(e)}
 
 
 def download_model(speaker_id: str) -> bytes:
