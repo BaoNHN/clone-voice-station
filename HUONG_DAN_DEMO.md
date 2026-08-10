@@ -70,6 +70,12 @@ Chạy trên **http://127.0.0.1:8090**. Lần đầu khởi động, terminal in
 
 **Lưu lại cả hai** — không có màn hình "quên mật khẩu": nếu mất mật khẩu manager, phải sửa trực tiếp trong `voice_station.db` (bảng `managers`) hoặc xoá dòng đó để service tự seed lại tài khoản mới ở lần khởi động kế tiếp.
 
+> **Tài khoản manager hiện tại của máy này** (mật khẩu gốc lúc seed không kịp lưu lại trước khi mất, đã đặt lại thủ công qua `database.change_manager_password()`):
+> - Username: `manager`
+> - Password: `TestPass123!`
+>
+> Đổi lại bằng nút "Đổi mật khẩu" trong dashboard sau khi đăng nhập nếu muốn dùng mật khẩu khác.
+
 ---
 
 ## 4. Demo Dashboard Quản Trị
