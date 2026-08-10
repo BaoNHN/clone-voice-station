@@ -160,6 +160,17 @@ def start_train(speaker_id: str, samples: list) -> dict:
         return {"status": "error", "message": f"Không kết nối được tới Colab: {e}"}
 
 
+# Cloudflare's own edge error codes for a tunnel that's up but not currently answering
+# (origin/cloudflared unresponsive) -- confirmed for real: a live training run got HTTP 530
+# ("Cloudflare Tunnel error 1033") back from a poll a few minutes after entering the heavy
+# GPU training phase, while training kept running on Colab regardless. Unlike a genuine
+# app-level error (Flask itself returning 400/404/500), these come from Cloudflare's edge
+# *instead of* reaching our server at all, so they get the same "still might be running,
+# don't give up immediately" leniency as a network-level RequestException below, not the
+# immediate-failure treatment a real HTTP error from our own app gets.
+_CLOUDFLARE_TUNNEL_ERROR_CODES = {502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530}
+
+
 def train_status(speaker_id: str) -> dict:
     endpoint = get_endpoint()
     if not endpoint:
@@ -169,6 +180,8 @@ def train_status(speaker_id: str) -> dict:
         resp = requests.get(f"{endpoint}/train_status/{speaker_id}", timeout=get_timeout("short"))
         if resp.status_code == 200:
             return resp.json()
+        if resp.status_code in _CLOUDFLARE_TUNNEL_ERROR_CODES:
+            return {"status": "network_error", "message": f"Cloudflare Tunnel error (HTTP {resp.status_code})"}
         return {"status": "error", "message": f"HTTP {resp.status_code}"}
     except requests.exceptions.RequestException as e:
         # Distinct from "error" above -- confirmed for real that a real training run (heavy
