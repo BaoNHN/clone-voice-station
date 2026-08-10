@@ -139,7 +139,7 @@ Toàn bộ luồng này chỉ dùng **remote mode** (gọi `clone-voice-station`
 
 ## 11. Chạy Colab notebook
 
-`clone-voice-station/colab/` có 3 notebook. Cả 3 đều đã được sửa để không còn phụ thuộc `rvc-python`/fairseq (thư viện này không build được trên Python 3.11+, phiên bản runtime Colab hiện tại) — xem mục "Giới hạn/lịch sử" cuối file.
+`clone-voice-station/colab/` chỉ còn 1 notebook — `voice_server.ipynb` — đã được sửa để không còn phụ thuộc `rvc-python`/fairseq (thư viện này không build được trên Python 3.11+, phiên bản runtime Colab hiện tại) — xem mục "Giới hạn/lịch sử" cuối file. Trước đây còn có `train_rvc.ipynb`/`serve_rvc.ipynb` (bản cũ, tách rời huấn luyện/phục vụ, trước khi mọi thứ được gộp) nhưng đã xoá — `voice_server.ipynb` tự train bất kỳ giọng nào qua hàng đợi API, không cần chạy notebook riêng theo kịch bản thủ công; giữ 3 notebook chạy song song chỉ tốn thêm chi phí Colab không cần thiết.
 
 ### `voice_server.ipynb` — bản đang dùng thật (production)
 
@@ -155,18 +155,9 @@ Notebook duy nhất phục vụ cả RVC **và** STT Lab Tier 2, chạy tuần t
 
 Notebook phải giữ chạy liên tục — dừng/khởi động lại runtime sẽ đổi URL tunnel, phải dán lại.
 
-### `train_rvc.ipynb` / `serve_rvc.ipynb` — bản cũ, tách rời huấn luyện/phục vụ
-
-Hai notebook này có trước khi mọi thứ được gộp vào `voice_server.ipynb`; vẫn hữu ích khi muốn train một giọng cụ thể theo kịch bản thủ công (đúng tinh thần thesis Section 4.1 Stage 2), tách biệt khỏi service đang chạy:
-
-**`train_rvc.ipynb`**: sửa `SPEAKER_NAME` trong cell CONFIGURATION → mount Drive → tải audio thô lên `DATASET_RAW` trên Drive → chạy tuần tự các cell còn lại (slice/normalize → preprocess → F0 → HuBERT → filelist → train ~200 epoch, 30–60 phút trên T4 → build FAISS index → export `.pth`+`.index` vào `MODELS_DIR` trên Drive).
-
-**`serve_rvc.ipynb`**: chạy sau khi đã có `.pth`+`.index` từ `train_rvc.ipynb` (cùng `SPEAKER_NAME`) → mount Drive + clone RVC repo + cài dependency → kiểm tra GPU → khởi động Flask server (`/health`, `/convert`, shell ra `infer/cli.py` của repo thay vì gọi thẳng `rvc-python`) → cloudflared tunnel → in `RVC_ENDPOINT` để dán vào `.env`/biến môi trường của app.
-
 ## 12. Giới hạn đã biết / ngoài phạm vi
 
-- Chưa có preview WER trước/sau khi train.
+- Có preview WER trước/sau khi train (Gate 1: tập kiểm định riêng của khách; Gate 2: benchmark tiếng Việt tổng quát cố định — xem `voice/stt_local_train.py`), nhưng chưa hiển thị số này lên UI `/stt-lab` cho khách xem trực tiếp, chỉ có trong log server.
 - Upload mẫu chỉ qua file, chưa có ghi âm trực tiếp trong `/stt-lab` (chỉ `voice-lab-example` có mic UI).
-- `voice-lab-example` chưa demo Tier 2 LoRA (chỉ có sẵn hạ tầng, chưa nối UI/luồng thử).
+- `voice-lab-example` chưa demo Tier 2 LoRA qua UI thật (chỉ có sẵn hạ tầng/tool dòng lệnh — `tools/test_medical_lora_wer.py`, `tools/import_hf_stt_dataset.py` — chưa nối vào giao diện `/compare`).
 - Mic live transcription trong `rag-legal-assistant` chỉ dùng remote mode — chưa chuyển sang local mode của `clone-voice-client`.
-- `train_rvc.ipynb`/`serve_rvc.ipynb` là bản cũ (tách rời), không có route STT Lab Tier 2 — chỉ `voice_server.ipynb` có.

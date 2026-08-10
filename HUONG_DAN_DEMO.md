@@ -299,9 +299,7 @@ clone-voice-station/
 │   ├── rvc_client.py                  # HTTP client gọi Colab (convert/train/health)
 │   └── scripts.py                     # Kịch bản đọc mẫu để thu âm
 ├── colab/
-│   ├── voice_server.ipynb             # Notebook chạy RVC + F5-TTS server (bản mới nhất)
-│   ├── train_rvc.ipynb                # Notebook huấn luyện RVC (bản cũ)
-│   └── serve_rvc.ipynb                # Notebook phục vụ RVC (bản cũ)
+│   └── voice_server.ipynb             # Notebook duy nhất: RVC + F5-TTS + STT Lab Tier 2 (train + serve)
 ├── templates/
 │   ├── login.html                     # Đăng nhập manager
 │   └── dashboard.html                 # Dashboard quản trị (mục 4)

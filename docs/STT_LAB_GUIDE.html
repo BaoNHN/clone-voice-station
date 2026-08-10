@@ -174,7 +174,7 @@ DELETE /api/stt/account               xoá toàn bộ tài khoản + dữ liệu
 <p>Toàn bộ luồng này chỉ dùng <span class="tag">Remote</span> mode (gọi <code>clone-voice-station</code> qua HTTP) — chưa chuyển sang local mode của <code>clone-voice-client</code> (điều đó chỉ có trong <code>voice-lab-example</code>, mục 6).</p>
 
 <h2>11. Chạy Colab notebook</h2>
-<p><code>clone-voice-station/colab/</code> có 3 notebook. Cả 3 đều đã được sửa để không còn phụ thuộc <code>rvc-python</code>/fairseq (thư viện này không build được trên Python 3.11+, phiên bản runtime Colab hiện tại).</p>
+<p><code>clone-voice-station/colab/</code> chỉ còn 1 notebook — <code>voice_server.ipynb</code> — đã được sửa để không còn phụ thuộc <code>rvc-python</code>/fairseq (thư viện này không build được trên Python 3.11+, phiên bản runtime Colab hiện tại). Trước đây còn có <code>train_rvc.ipynb</code>/<code>serve_rvc.ipynb</code> (bản cũ, tách rời huấn luyện/phục vụ, trước khi mọi thứ được gộp) nhưng đã xoá — <code>voice_server.ipynb</code> tự train bất kỳ giọng nào qua hàng đợi API, không cần chạy notebook riêng theo kịch bản thủ công; giữ 3 notebook chạy song song chỉ tốn thêm chi phí Colab không cần thiết.</p>
 
 <h3><code>voice_server.ipynb</code> — bản đang dùng thật (production)</h3>
 <p>Notebook duy nhất phục vụ cả RVC <strong>và</strong> STT Lab Tier 2, chạy tuần tự từ trên xuống:</p>
@@ -189,22 +189,12 @@ DELETE /api/stt/account               xoá toàn bộ tài khoản + dữ liệu
 </ol>
 <p>Notebook phải giữ chạy liên tục — dừng/khởi động lại runtime sẽ đổi URL tunnel, phải dán lại.</p>
 
-<h3><code>train_rvc.ipynb</code> / <code>serve_rvc.ipynb</code> — bản cũ, tách rời huấn luyện/phục vụ</h3>
-<p>Hai notebook này có trước khi mọi thứ được gộp vào <code>voice_server.ipynb</code>; vẫn hữu ích khi muốn train một giọng cụ thể theo kịch bản thủ công, tách biệt khỏi service đang chạy:</p>
-<div class="card">
-  <strong><code>train_rvc.ipynb</code></strong>: sửa <code>SPEAKER_NAME</code> trong cell CONFIGURATION → mount Drive → tải audio thô lên <code>DATASET_RAW</code> trên Drive → chạy tuần tự các cell còn lại (slice/normalize → preprocess → F0 → HuBERT → filelist → train ~200 epoch, 30–60 phút trên T4 → build FAISS index → export <code>.pth</code>+<code>.index</code> vào <code>MODELS_DIR</code> trên Drive).
-</div>
-<div class="card">
-  <strong><code>serve_rvc.ipynb</code></strong>: chạy sau khi đã có <code>.pth</code>+<code>.index</code> từ <code>train_rvc.ipynb</code> (cùng <code>SPEAKER_NAME</code>) → mount Drive + clone RVC repo + cài dependency → kiểm tra GPU → khởi động Flask server (<code>/health</code>, <code>/convert</code>, shell ra <code>infer/cli.py</code> của repo thay vì gọi thẳng <code>rvc-python</code>) → cloudflared tunnel → in <code>RVC_ENDPOINT</code> để dán vào <code>.env</code>/biến môi trường của app.
-</div>
-
 <h2>12. Giới hạn đã biết / ngoài phạm vi</h2>
 <ul>
-  <li>Chưa có preview WER trước/sau khi train.</li>
+  <li>Có preview WER trước/sau khi train (Gate 1: tập kiểm định riêng của khách; Gate 2: benchmark tiếng Việt tổng quát cố định — xem <code>voice/stt_local_train.py</code>), nhưng chưa hiển thị số này lên UI <code>/stt-lab</code> cho khách xem trực tiếp, chỉ có trong log server.</li>
   <li>Upload mẫu chỉ qua file, chưa có ghi âm trực tiếp trong <code>/stt-lab</code> (chỉ <code>voice-lab-example</code> có mic UI).</li>
-  <li><code>voice-lab-example</code> chưa demo Tier 2 LoRA (chỉ có sẵn hạ tầng, chưa nối UI/luồng thử).</li>
+  <li><code>voice-lab-example</code> chưa demo Tier 2 LoRA qua UI thật (chỉ có sẵn hạ tầng/tool dòng lệnh — <code>tools/test_medical_lora_wer.py</code>, <code>tools/import_hf_stt_dataset.py</code> — chưa nối vào giao diện <code>/compare</code>).</li>
   <li>Mic live transcription trong <code>rag-legal-assistant</code> chỉ dùng remote mode — chưa chuyển sang local mode của <code>clone-voice-client</code>.</li>
-  <li><code>train_rvc.ipynb</code>/<code>serve_rvc.ipynb</code> là bản cũ (tách rời), không có route STT Lab Tier 2 — chỉ <code>voice_server.ipynb</code> có.</li>
 </ul>
 
 </div>
