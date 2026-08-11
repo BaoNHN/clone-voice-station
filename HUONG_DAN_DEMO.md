@@ -15,6 +15,7 @@
 7. [Di Chuyển Dữ Liệu Từ Ứng Dụng Cũ](#7-di-chuyển-dữ-liệu-từ-ứng-dụng-cũ)
 8. [Kiến Trúc Kỹ Thuật](#8-kiến-trúc-kỹ-thuật)
 9. [Xử Lý Sự Cố](#9-xử-lý-sự-cố)
+10. [Demo Công Khai Qua Ngrok (Tuỳ Chọn)](#10-demo-công-khai-qua-ngrok-tuỳ-chọn)
 
 ---
 
@@ -385,6 +386,45 @@ Manager có thể chuyển bất kỳ giọng nào sang `failed` bất cứ lúc
 - Endpoint RVC còn online (mục RVC Connection trong dashboard)
 - Đã ghi đủ tối thiểu 5 mẫu trước khi bấm huấn luyện
 - Job tự dừng sau tối đa 2 giờ nếu Colab không phản hồi — cần khởi động lại Colab notebook rồi **Huấn luyện lại** (dashboard hoặc `POST /api/profiles/{id}/train`), không cần thu âm lại từ đầu
+
+---
+
+## 10. Demo Công Khai Qua Ngrok (Tuỳ Chọn)
+
+> Tạm thời — dùng để demo/đánh giá thesis, chưa phải deploy thật (không có TLS/CDN/scaling, chỉ dựa vào auth sẵn có của từng app). Hướng future work là thay bằng deploy thật.
+
+Có 2 chặng tunnel **độc lập nhau**, dùng cho 2 mục đích khác nhau:
+
+1. **Colab (RVC) → clone-voice-station** — đã có UI sẵn trong dashboard (mục 2 ở trên: dán URL Colab vào ô "Endpoint URL"). **Không bắt buộc** phải làm bước 2/3 dưới đây mới demo được RVC — chặng này hoạt động độc lập.
+2. **clone-voice-station → rag-legal-assistant / voice-lab-example** — chặng mới, dùng khi muốn cho người ngoài (không cùng máy) truy cập được 2 app khách này.
+
+### Bước 1: Lộ clone-voice-station ra ngoài
+
+```bash
+set NGROK_AUTHTOKEN=your_token   # lấy tại https://dashboard.ngrok.com/tunnels/authtokens
+python start_ngrok.py
+```
+
+In ra một URL công khai (VD `https://xxxx.ngrok-free.app`) trỏ vào port 8090. Giữ cửa sổ này chạy — tunnel tắt khi đóng.
+
+### Bước 2: Trỏ app khách vào URL đó
+
+`rag-legal-assistant` và `voice-lab-example` đều đọc địa chỉ clone-voice-station qua biến môi trường `VOICE_STATION_URL` (`clone_voice_client`, xem `voice/station_client.py` phía rag-legal-assistant) — **chỉ set lúc khởi động, không có form nhập URL lúc đang chạy**, nên phải set biến rồi khởi động lại app đó:
+
+```bash
+set VOICE_STATION_URL=https://xxxx.ngrok-free.app
+python app.py
+```
+
+### Bước 3 (tuỳ chọn): Lộ luôn app khách đó ra ngoài
+
+Nếu muốn người ngoài truy cập thẳng giao diện chat/demo của `rag-legal-assistant` hoặc `voice-lab-example` (không chỉ gọi API), chạy `start_ngrok.py` tương ứng trong thư mục app đó (port 8000 cho rag-legal-assistant, port 8091 cho voice-lab-example) — độc lập với tunnel ở Bước 1.
+
+### Lưu ý
+
+- Mỗi `start_ngrok.py` cần `NGROK_AUTHTOKEN` riêng (hoặc dùng chung 1 token cho nhiều tunnel nếu gói ngrok cho phép).
+- Tunnel ngrok miễn phí đổi URL mỗi lần khởi động lại — cần lặp lại Bước 2 (và restart app khách) mỗi lần Bước 1 chạy lại.
+- Không hardcode authtoken vào file — dùng biến môi trường (xem comment đầu mỗi `start_ngrok.py`).
 
 ---
 

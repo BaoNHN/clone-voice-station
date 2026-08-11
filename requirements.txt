@@ -58,3 +58,6 @@ pydub>=0.25.1
 # SDK rag-legal-assistant uses, so these scripts exercise the real client path
 # instead of hand-rolled requests calls.
 -e ../clone-voice-client
+
+# start_ngrok.py -- demo-only public tunnel, temporary stand-in until real deployment
+ngrok>=1.7.0
