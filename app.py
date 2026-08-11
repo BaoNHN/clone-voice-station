@@ -44,11 +44,15 @@ from database.database import (
     add_stt_training_sample, list_stt_training_samples, get_stt_training_sample,
     update_stt_training_sample_text,
     delete_stt_training_sample, set_stt_adapter_resume_path,
+    list_all_stt_adapters_global, publish_stt_adapter, unpublish_stt_adapter,
+    get_published_stt_adapter_for_client,
 )
-from voice import rvc_client, stt
+from voice import rvc_client, stt, stt_adapter_infer
 from voice.scripts import get_scripts
 from engine import voice_engine, realism_engine, stt_train_engine
-from engine.server_log import read_recent_lines
+from engine.server_log import read_recent_lines, get_logger
+
+logger = get_logger()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(VOICE_SAMPLES_DIR, exist_ok=True)
@@ -258,6 +262,21 @@ async def dashboard_page(request: Request):
         "manager": request.session["manager"],
         "csrf_token": request.session["csrf_token"],
         "min_samples": MIN_TRAIN_SAMPLES,
+    })
+
+
+@app.get("/manager/stt", response_class=HTMLResponse)
+async def manager_stt_page(request: Request):
+    if not manager_logged_in(request):
+        return RedirectResponse("/login", status_code=302)
+    if not request.session.get("csrf_token"):
+        request.session["csrf_token"] = secrets.token_urlsafe(32)
+    return templates.TemplateResponse(request, "manager_stt.html", {
+        "manager": request.session["manager"],
+        "csrf_token": request.session["csrf_token"],
+        "max_hotwords": MAX_HOTWORDS_PER_ADAPTER,
+        "max_stt_train_samples": MAX_STT_TRAIN_SAMPLES,
+        "min_stt_train_samples": MIN_STT_TRAIN_SAMPLES,
     })
 
 
@@ -752,18 +771,32 @@ async def transcribe_route(
     gets back plain text to feed into its own assistant as a normal text
     query; this service never sees or needs to know what that query means.
 
-    Tries the Colab-hosted PhoWhisper endpoint first (Vietnamese-tuned, see
-    voice/rvc_client.py's transcribe_remote() and colab/voice_server.ipynb) and
-    falls back to the local, CPU-only openai-whisper model (voice/stt.py)
-    whenever Colab is unset/unreachable — same degrade-gracefully contract as
-    /api/speak's RVC conversion."""
+    If a manager has published a Tier 2 STT adapter for this client (see
+    /manager/stt/adapters/{id}/publish), tries that fine-tuned model first.
+    Otherwise -- or if the adapter fails to load/run -- tries the Colab-hosted
+    PhoWhisper endpoint (Vietnamese-tuned, see voice/rvc_client.py's
+    transcribe_remote() and colab/voice_server.ipynb) and falls back to the
+    local, CPU-only openai-whisper model (voice/stt.py) whenever Colab is
+    unset/unreachable — same degrade-gracefully contract as /api/speak's RVC
+    conversion."""
     audio_bytes = await audio.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Không có dữ liệu âm thanh.")
 
     mime = audio.content_type or mimetypes.guess_type(audio.filename or "")[0] or "audio/webm"
 
-    result = await asyncio.to_thread(rvc_client.transcribe_remote, audio_bytes, mime, language or None)
+    result = None
+    published_adapter = get_published_stt_adapter_for_client(client["id"])
+    if published_adapter:
+        try:
+            result = await asyncio.to_thread(
+                stt_adapter_infer.transcribe, published_adapter, audio_bytes, mime, language or None
+            )
+        except Exception as e:
+            logger.warning(f"[STT-adapter] Adapter #{published_adapter['id']} lỗi, dùng model gốc thay thế: {e}")
+
+    if result is None:
+        result = await asyncio.to_thread(rvc_client.transcribe_remote, audio_bytes, mime, language or None)
     if result is None:
         try:
             result = await asyncio.to_thread(stt.transcribe, audio_bytes, mime, language or None)
@@ -1169,6 +1202,253 @@ async def delete_stt_account_route(request: Request, guest_id: int = Depends(req
     request.session.pop("stt_guest_id", None)
     request.session.pop("stt_guest_username", None)
     request.session.pop("stt_csrf_token", None)
+    return {"status": "ok"}
+
+
+# ── Manager: STT Tier 2 training + publish-to-client ────────────────────────
+# Mirrors the guest STT Lab routes above (same underlying database.py functions,
+# same engine/stt_train_engine.py training path, same _reject_if_training/
+# _clean_hotwords/_delete_stt_adapter_files helpers) but scoped to require_manager
+# instead of a guest's own ownership -- a manager can touch ANY adapter (own or
+# any guest's), and additionally publish one as a client's active production
+# model for /api/transcribe (see that route below). Kept as separate routes
+# under /manager/stt/* rather than widening the guest routes' auth, so a guest's
+# own self-serve capability and a manager's global one stay independently
+# reasoned about, same split /manager/profiles/* already uses for RVC voices.
+def _get_stt_adapter_or_404(adapter_id: int) -> dict:
+    adapter = get_stt_adapter(adapter_id)
+    if not adapter:
+        raise HTTPException(status_code=404, detail="Không tìm thấy adapter.")
+    return adapter
+
+
+@app.get("/manager/stt/adapters")
+async def manager_list_stt_adapters_route(manager: str = Depends(require_manager)):
+    return list_all_stt_adapters_global()
+
+
+@app.post("/manager/stt/adapters")
+async def manager_create_stt_adapter_route(request: Request, manager: str = Depends(require_manager)):
+    data = await request.json()
+    name = (data.get("name") or "").strip()
+    if not name or len(name) > 100:
+        raise HTTPException(status_code=400, detail="Tên adapter phải dài 1-100 ký tự.")
+    base_model = data.get("base_model") or ALLOWED_STT_BASE_MODELS[0]
+    if base_model not in ALLOWED_STT_BASE_MODELS:
+        raise HTTPException(status_code=400, detail=f"base_model phải là một trong: {', '.join(ALLOWED_STT_BASE_MODELS)}")
+    # No MAX_STT_ADAPTERS_PER_GUEST cap here -- that limit exists to bound an
+    # anonymous self-serve guest's GPU usage; a manager-created adapter is a
+    # deliberate admin action, not drive-by usage.
+    adapter_id = create_stt_adapter(None, name, base_model)
+    return {"status": "ok", "adapter_id": adapter_id}
+
+
+@app.get("/manager/stt/adapters/{adapter_id}")
+async def manager_get_stt_adapter_route(adapter_id: int, manager: str = Depends(require_manager)):
+    return _get_stt_adapter_or_404(adapter_id)
+
+
+@app.put("/manager/stt/adapters/{adapter_id}")
+async def manager_update_stt_adapter_route(adapter_id: int, request: Request, manager: str = Depends(require_manager)):
+    adapter = _get_stt_adapter_or_404(adapter_id)
+    data = await request.json()
+    if "name" in data:
+        name = (data.get("name") or "").strip()
+        if not name or len(name) > 100:
+            raise HTTPException(status_code=400, detail="Tên adapter phải dài 1-100 ký tự.")
+        rename_stt_adapter(adapter_id, name)
+    if "hotwords" in data:
+        _reject_if_training(adapter)
+        update_stt_adapter_hotwords(adapter_id, _clean_hotwords(data.get("hotwords")))
+    return {"status": "ok"}
+
+
+@app.post("/manager/stt/adapters/{adapter_id}/samples")
+async def manager_upload_stt_sample_route(adapter_id: int, reference_text: str = Form(...),
+                                           audio: UploadFile = File(...), is_holdout: bool = Form(False),
+                                           manager: str = Depends(require_manager)):
+    adapter = _get_stt_adapter_or_404(adapter_id)
+    _reject_if_training(adapter)
+    reference_text = reference_text.strip()
+    if not reference_text:
+        raise HTTPException(status_code=400, detail="Cần nhập transcript cho mẫu ghi âm.")
+    if len(list_stt_training_samples(adapter_id)) >= MAX_STT_TRAIN_SAMPLES:
+        raise HTTPException(status_code=400, detail=f"Tối đa {MAX_STT_TRAIN_SAMPLES} mẫu mỗi adapter.")
+
+    content = await audio.read()
+    ext = os.path.splitext(audio.filename or "")[1] or ".wav"
+    sample_dir = os.path.join(STT_SAMPLES_DIR, str(adapter_id))
+    os.makedirs(sample_dir, exist_ok=True)
+    sample_path = os.path.join(sample_dir, f"{uuid.uuid4()}{ext}")
+    with open(sample_path, "wb") as f:
+        f.write(content)
+
+    try:
+        info = sf.info(sample_path)
+        duration = info.frames / info.samplerate
+    except Exception:
+        os.remove(sample_path)
+        raise HTTPException(status_code=400, detail="Không đọc được file âm thanh.")
+    if duration > MAX_STT_SAMPLE_DURATION_SEC:
+        os.remove(sample_path)
+        raise HTTPException(status_code=400, detail=f"Mẫu ghi âm tối đa {MAX_STT_SAMPLE_DURATION_SEC} giây.")
+
+    sample_id = add_stt_training_sample(adapter_id, sample_path, reference_text, is_holdout=is_holdout)
+    return {"status": "ok", "sample_id": sample_id}
+
+
+@app.get("/manager/stt/adapters/{adapter_id}/samples")
+async def manager_list_stt_samples_route(adapter_id: int, manager: str = Depends(require_manager)):
+    _get_stt_adapter_or_404(adapter_id)
+    return list_stt_training_samples(adapter_id)
+
+
+@app.get("/manager/stt/adapters/{adapter_id}/samples/{sample_id}/audio")
+async def manager_stt_sample_audio_route(adapter_id: int, sample_id: int, manager: str = Depends(require_manager)):
+    _get_stt_adapter_or_404(adapter_id)
+    sample = get_stt_training_sample(sample_id)
+    if not sample or sample["adapter_id"] != adapter_id or not os.path.exists(sample["audio_path"]):
+        raise HTTPException(status_code=404, detail="Không tìm thấy file mẫu ghi âm.")
+    mime = mimetypes.guess_type(sample["audio_path"])[0] or "application/octet-stream"
+    return FileResponse(sample["audio_path"], media_type=mime)
+
+
+@app.put("/manager/stt/adapters/{adapter_id}/samples/{sample_id}")
+async def manager_update_stt_sample_route(adapter_id: int, sample_id: int, request: Request,
+                                           manager: str = Depends(require_manager)):
+    adapter = _get_stt_adapter_or_404(adapter_id)
+    _reject_if_training(adapter)
+    sample = get_stt_training_sample(sample_id)
+    if not sample or sample["adapter_id"] != adapter_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy mẫu.")
+    data = await request.json()
+    reference_text = (data.get("reference_text") or "").strip()
+    if not reference_text:
+        raise HTTPException(status_code=400, detail="Cần nhập transcript cho mẫu ghi âm.")
+    update_stt_training_sample_text(sample_id, reference_text)
+    return {"status": "ok"}
+
+
+@app.delete("/manager/stt/adapters/{adapter_id}/samples/{sample_id}")
+async def manager_delete_stt_sample_route(adapter_id: int, sample_id: int, manager: str = Depends(require_manager)):
+    adapter = _get_stt_adapter_or_404(adapter_id)
+    _reject_if_training(adapter)
+    sample = get_stt_training_sample(sample_id)
+    if not sample or sample["adapter_id"] != adapter_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy mẫu.")
+    if os.path.exists(sample["audio_path"]):
+        os.remove(sample["audio_path"])
+    delete_stt_training_sample(sample_id)
+    return {"status": "ok"}
+
+
+@app.post("/manager/stt/adapters/{adapter_id}/train")
+async def manager_train_stt_adapter_route(adapter_id: int, request: Request, background_tasks: BackgroundTasks,
+                                           manager: str = Depends(require_manager)):
+    adapter = _get_stt_adapter_or_404(adapter_id)
+    if adapter["status"] == "training":
+        raise HTTPException(status_code=400, detail="Adapter này đang được huấn luyện.")
+    if len(list_stt_training_samples(adapter_id)) < MIN_STT_TRAIN_SAMPLES:
+        raise HTTPException(status_code=400, detail=f"Cần tối thiểu {MIN_STT_TRAIN_SAMPLES} mẫu để huấn luyện.")
+
+    data = await request.json() if await request.body() else {}
+    backend = data.get("backend", "auto")
+    if backend not in ("auto", "colab", "local"):
+        raise HTTPException(status_code=400, detail="backend phải là auto | colab | local.")
+
+    background_tasks.add_task(stt_train_engine.run_training, adapter_id, backend)
+    return {"status": "ok", "message": "Đã bắt đầu huấn luyện."}
+
+
+@app.post("/manager/stt/adapters/{adapter_id}/continue")
+async def manager_continue_stt_adapter_route(adapter_id: int, pack: UploadFile = File(...),
+                                              manager: str = Depends(require_manager)):
+    adapter = _get_stt_adapter_or_404(adapter_id)
+    content = await pack.read()
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            manifest = json.loads(zf.read("manifest.json"))
+            if manifest.get("tier") != 2:
+                raise HTTPException(status_code=400, detail="Pack này không chứa adapter đã huấn luyện (Tier 2).")
+            if manifest.get("base_model") != adapter["base_model"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Pack này dùng base_model={manifest.get('base_model')}, adapter hiện tại dùng {adapter['base_model']}.",
+                )
+            resume_dir = os.path.join(STT_MODELS_DIR, f"{adapter_id}_resume")
+            if os.path.isdir(resume_dir):
+                shutil.rmtree(resume_dir)
+            os.makedirs(resume_dir, exist_ok=True)
+            zf.extract("adapter_model.safetensors", resume_dir)
+            zf.extract("adapter_config.json", resume_dir)
+    except KeyError:
+        raise HTTPException(status_code=400, detail="Pack thiếu adapter_model.safetensors hoặc adapter_config.json.")
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="File không phải zip hợp lệ.")
+
+    set_stt_adapter_resume_path(adapter_id, resume_dir)
+    return {"status": "ok", "message": "Đã nạp adapter cũ — lần huấn luyện tiếp theo sẽ tiếp tục từ đây."}
+
+
+@app.get("/manager/stt/adapters/{adapter_id}/download")
+async def manager_download_stt_adapter_route(adapter_id: int, manager: str = Depends(require_manager)):
+    adapter = _get_stt_adapter_or_404(adapter_id)
+
+    has_lora = bool(adapter["adapter_path"]) and os.path.isdir(adapter["adapter_path"])
+    manifest = {
+        "adapter_id": adapter["id"],
+        "name": adapter["name"],
+        "base_model": adapter["base_model"],
+        "tier": 2 if has_lora else 1,
+        "backend_used": adapter["backend_used"] if has_lora else None,
+        "created_at": adapter["created_at"],
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        zf.writestr("hotwords.json", json.dumps(adapter["hotwords"], ensure_ascii=False, indent=2))
+        if has_lora:
+            for fname in ("adapter_model.safetensors", "adapter_config.json"):
+                fpath = os.path.join(adapter["adapter_path"], fname)
+                if os.path.exists(fpath):
+                    zf.write(fpath, arcname=fname)
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{adapter_id}.stt-pack.zip"'},
+    )
+
+
+@app.post("/manager/stt/adapters/{adapter_id}/publish")
+async def manager_publish_stt_adapter_route(adapter_id: int, request: Request, manager: str = Depends(require_manager)):
+    adapter = _get_stt_adapter_or_404(adapter_id)
+    if adapter["status"] != "ready" or not adapter["adapter_path"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Chỉ có thể publish adapter đã huấn luyện xong (status='ready', có adapter_path).",
+        )
+    data = await request.json()
+    client_id = data.get("client_id")
+    if not client_id or not get_client(client_id):
+        raise HTTPException(status_code=400, detail="client_id không hợp lệ.")
+    publish_stt_adapter(adapter_id, client_id)
+    return {"status": "ok"}
+
+
+@app.post("/manager/stt/adapters/{adapter_id}/unpublish")
+async def manager_unpublish_stt_adapter_route(adapter_id: int, manager: str = Depends(require_manager)):
+    _get_stt_adapter_or_404(adapter_id)
+    unpublish_stt_adapter(adapter_id)
+    return {"status": "ok"}
+
+
+@app.delete("/manager/stt/adapters/{adapter_id}")
+async def manager_delete_stt_adapter_route(adapter_id: int, manager: str = Depends(require_manager)):
+    adapter = _get_stt_adapter_or_404(adapter_id)
+    _delete_stt_adapter_files(adapter)
+    delete_stt_adapter(adapter_id)
     return {"status": "ok"}
 
 

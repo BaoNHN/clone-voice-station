@@ -249,6 +249,16 @@ def init_db():
         "ALTER TABLE stt_adapters ADD COLUMN adapter_path TEXT",
         "ALTER TABLE stt_adapters ADD COLUMN resume_from_path TEXT",
         "ALTER TABLE stt_adapters ADD COLUMN backend_used TEXT",
+        # Manager-published adapters (added 2026-08-12): guest_id stays NULL for
+        # these (they're created by a manager, not a self-serve guest -- see
+        # app.py's /manager/stt/adapters routes). client_id is which client app's
+        # /api/transcribe calls should use this adapter; is_published gates that
+        # -- an adapter can be trained/tested without affecting production traffic
+        # until a manager explicitly publishes it. At most one published adapter
+        # per client_id at a time (enforced in publish_stt_adapter() below, not a
+        # DB constraint, same pattern as voice_profiles.is_default).
+        "ALTER TABLE stt_adapters ADD COLUMN client_id INTEGER",
+        "ALTER TABLE stt_adapters ADD COLUMN is_published INTEGER DEFAULT 0",
     ):
         try:
             c.execute(stmt)
@@ -460,7 +470,8 @@ def verify_stt_guest_login(username: str, password: str):
 
 _STT_ADAPTER_COLUMNS = (
     "id, guest_id, name, base_model, hotwords_json, created_at, "
-    "status, error_message, progress_message, adapter_path, resume_from_path, backend_used"
+    "status, error_message, progress_message, adapter_path, resume_from_path, backend_used, "
+    "client_id, is_published"
 )
 
 
@@ -470,6 +481,7 @@ def _stt_adapter_row_to_dict(row) -> dict:
         "hotwords": json.loads(row[4] or "[]"), "created_at": row[5],
         "status": row[6], "error_message": row[7], "progress_message": row[8],
         "adapter_path": row[9], "resume_from_path": row[10], "backend_used": row[11],
+        "client_id": row[12], "is_published": bool(row[13]),
     }
 
 
@@ -501,6 +513,9 @@ def count_stt_adapters(guest_id: int) -> int:
 
 
 def create_stt_adapter(guest_id: int, name: str, base_model: str = "whisper-tiny") -> int:
+    """guest_id=None for a manager-created adapter (see app.py's
+    /manager/stt/adapters routes) -- it has no self-serve owner, only ever
+    reachable/manageable by a manager, until published to a client."""
     conn = get_conn()
     c    = conn.cursor()
     c.execute(
@@ -511,6 +526,67 @@ def create_stt_adapter(guest_id: int, name: str, base_model: str = "whisper-tiny
     conn.commit()
     conn.close()
     return adapter_id
+
+
+def list_all_stt_adapters_global() -> list:
+    """Manager-dashboard view: every STT Tier 2 adapter across both guests and
+    manager-created ones, with the owning guest's username (if any) and the
+    published-to client's name (if any) attached -- mirrors
+    list_all_voice_profiles_global()'s pattern for RVC voices."""
+    conn = get_conn()
+    rows = conn.execute(f"""
+        SELECT {', '.join('sa.' + col.strip() for col in _STT_ADAPTER_COLUMNS.split(','))},
+               sg.username, cl.name
+        FROM stt_adapters sa
+        LEFT JOIN stt_guests sg ON sg.id = sa.guest_id
+        LEFT JOIN clients cl ON cl.id = sa.client_id
+        ORDER BY sa.id DESC
+    """).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        d = _stt_adapter_row_to_dict(r[:14])
+        d["guest_username"] = r[14]
+        d["client_name"] = r[15]
+        result.append(d)
+    return result
+
+
+def publish_stt_adapter(adapter_id: int, client_id: int):
+    """Marks adapter_id as the active Tier 2 model for client_id's /api/transcribe
+    calls -- unpublishes any adapter previously published for that same client
+    first, so at most one is ever active per client (same pattern as
+    voice_profiles.is_default's single-default-per-user invariant)."""
+    conn = get_conn()
+    conn.execute("UPDATE stt_adapters SET is_published=0 WHERE client_id=? AND is_published=1", (client_id,))
+    conn.execute("UPDATE stt_adapters SET client_id=?, is_published=1 WHERE id=?", (client_id, adapter_id))
+    conn.commit()
+    conn.close()
+
+
+def unpublish_stt_adapter(adapter_id: int):
+    conn = get_conn()
+    conn.execute("UPDATE stt_adapters SET is_published=0 WHERE id=?", (adapter_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_published_stt_adapter_for_client(client_id: int):
+    """Used by /api/transcribe to decide whether to route through a fine-tuned
+    adapter instead of the base PhoWhisper/Whisper path -- only ever returns an
+    adapter that is both published AND has actually finished training
+    successfully (status='ready' with a real adapter_path), never a stale
+    'published' flag left over from before a retrain that hasn't completed or
+    that failed."""
+    conn = get_conn()
+    row = conn.execute(
+        f"SELECT {_STT_ADAPTER_COLUMNS} FROM stt_adapters "
+        f"WHERE client_id=? AND is_published=1 AND status='ready' AND adapter_path IS NOT NULL "
+        f"LIMIT 1",
+        (client_id,)
+    ).fetchone()
+    conn.close()
+    return _stt_adapter_row_to_dict(row) if row else None
 
 
 def rename_stt_adapter(adapter_id: int, name: str):

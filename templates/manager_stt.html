@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>STT — Huấn luyện &amp; Publish (Manager)</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: #16161d; color: #e8e8ec; padding: 24px 32px 60px;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+  header h1 { font-size: 20px; margin: 0; }
+  header .who { font-size: 15px; color: #9a9aa8; }
+  header .actions button, header .actions a {
+    background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #cfcfda;
+    padding: 6px 12px; border-radius: 7px; font-size: 15px; cursor: pointer; margin-left: 8px;
+    text-decoration: none; display: inline-block;
+  }
+  header .actions button:hover, header .actions a:hover { border-color: #6c8cff; color: #fff; }
+
+  .card {
+    background: #1f1f29; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
+    padding: 20px 22px; margin-bottom: 20px;
+  }
+  .card h2 { font-size: 18px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+  .card .desc { font-size: 15px; color: #9a9aa8; margin: 0 0 16px; }
+
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 15px; color: #9a9aa8; }
+  .field input, .field select {
+    padding: 8px 10px; border-radius: 7px; font-size: 16px; min-width: 140px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+  }
+  .field input:focus, .field select:focus { outline: none; border-color: #6c8cff; }
+  .field.wide input { min-width: 320px; }
+
+  button.btn {
+    padding: 8px 14px; border: none; border-radius: 7px; font-size: 15px; font-weight: 600;
+    background: #6c8cff; color: #0d0d12; cursor: pointer;
+  }
+  button.btn:hover { background: #86a2ff; }
+  button.btn.danger { background: #d94c4c; color: #fff; }
+  button.btn.danger:hover { background: #e86868; }
+  button.btn.ghost { background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #cfcfda; }
+  button.btn.ghost:hover { border-color: #6c8cff; color: #fff; }
+  button.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  select.inline {
+    padding: 7px 10px; border-radius: 7px; font-size: 15px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 16px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; }
+  th { color: #9a9aa8; font-weight: 500; font-size: 15px; text-transform: uppercase; letter-spacing: .03em; }
+  td.mono { font-family: "SF Mono", Consolas, monospace; font-size: 15px; color: #b6b6c2; }
+
+  textarea.hotwords {
+    width: 100%; min-width: 260px; min-height: 64px; padding: 8px 10px; border-radius: 7px;
+    font-size: 15px; background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+    font-family: inherit; resize: vertical;
+  }
+  textarea.hotwords:focus { outline: none; border-color: #6c8cff; }
+  .hw-count { font-size: 15px; color: #9a9aa8; margin-top: 4px; }
+  .hw-count.over { color: #ff8a8a; }
+
+  .toast {
+    position: fixed; bottom: 20px; right: 20px; padding: 12px 16px; border-radius: 9px;
+    background: #2a2a37; border: 1px solid rgba(255,255,255,0.12); font-size: 16px;
+    display: none; max-width: 360px;
+  }
+  .toast.error { border-color: rgba(217,76,76,0.4); color: #ff8a8a; }
+  .toast.ok    { border-color: rgba(80,200,120,0.4); color: #6fe08a; }
+
+  .empty { color: #77778a; font-size: 16px; padding: 10px 0; }
+
+  /* ── Adapter cards (Tier 1 + Tier 2) ── */
+  .adapter-card {
+    background: #17171f; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 14px;
+  }
+  .adapter-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .adapter-head .name { font-family: "SF Mono", Consolas, monospace; font-size: 16px; }
+  .tag {
+    font-size: 15px; padding: 2px 8px; border-radius: 999px;
+    background: rgba(150,150,170,0.15); color: #b6b6c2;
+  }
+  .status-pill { font-size: 15px; padding: 2px 9px; border-radius: 999px; }
+  .status-pill.ready      { background: rgba(80,200,120,0.15); color: #6fe08a; }
+  .status-pill.training   { background: rgba(255,196,0,0.15); color: #ffd25a; }
+  .status-pill.failed     { background: rgba(217,76,76,0.15); color: #ff8a8a; }
+  .progress-note { font-size: 15px; color: #9a9aa8; margin: 4px 0 10px; }
+
+  .training-item { margin-bottom: 14px; }
+  .training-item:last-child { margin-bottom: 0; }
+  .training-item .name { font-family: "SF Mono", Consolas, monospace; font-size: 16px; margin-bottom: 4px; }
+  .training-item .msg { font-size: 15px; color: #9a9aa8; margin-bottom: 6px; }
+  .indeterminate-bar {
+    height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden;
+  }
+  .indeterminate-bar::after {
+    content: ""; display: block; height: 100%; width: 40%; border-radius: 999px;
+    background: linear-gradient(90deg, #6c8cff, #86a2ff);
+    animation: indeterminate-slide 1.4s ease-in-out infinite;
+  }
+  @keyframes indeterminate-slide {
+    0%   { margin-left: -40%; }
+    100% { margin-left: 100%; }
+  }
+  .error-note { font-size: 15px; color: #ff8a8a; margin: 4px 0 10px; }
+
+  .section-label {
+    font-size: 15px; color: #77778a; text-transform: uppercase; letter-spacing: .03em;
+    margin: 14px 0 6px;
+  }
+  input.sample-search {
+    width: 100%; padding: 7px 10px; border-radius: 7px; font-size: 15px; margin-bottom: 8px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+  }
+  input.sample-search:focus { outline: none; border-color: #6c8cff; }
+  table.samples-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  table.samples-table th {
+    font-size: 15px; color: #77778a; text-transform: uppercase; letter-spacing: .03em;
+    text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+  table.samples-table td {
+    font-size: 15px; color: #cfcfda; padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);
+    vertical-align: top;
+  }
+  table.samples-table td.audio-cell { width: 1%; white-space: nowrap; }
+  table.samples-table td.audio-cell audio { height: 32px; max-width: 220px; }
+  table.samples-table td.actions-cell { width: 1%; white-space: nowrap; text-align: right; }
+  table.samples-table textarea.txt-edit {
+    width: 100%; min-height: 60px; padding: 6px 8px; border-radius: 6px; font-size: 15px;
+    background: #14141b; border: 1.5px solid #6c8cff; color: #e8e8ec; font-family: inherit; resize: vertical;
+  }
+  table.samples-table button.del-sample, table.samples-table button.edit-sample {
+    background: transparent; border: none; cursor: pointer; font-size: 15px; margin-left: 6px;
+  }
+  table.samples-table button.del-sample { color: #ff8a8a; }
+  table.samples-table button.edit-sample { color: #6c8cff; }
+  .pager { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .pager-info { font-size: 15px; color: #9a9aa8; }
+
+  .file-hint { font-size: 15px; color: #77778a; margin: 10px 0 4px; }
+  .upload-row, .train-row, .continue-row, .publish-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .upload-row input[type="text"] {
+    flex: 1; min-width: 180px; padding: 7px 10px; border-radius: 7px; font-size: 15px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+  }
+  .actions-row { display: flex; gap: 8px; margin-top: 10px; }
+
+  /* ── Publish-to-client controls: reused both inside an owned adapter's card
+     and, compactly, in the global "every adapter" table below -- publishing
+     doesn't require having authored the adapter (a manager can publish a
+     guest-trained one too), so this lives independent of the card UI. ── */
+  .publish-badge {
+    font-size: 15px; padding: 3px 10px; border-radius: 999px;
+    background: rgba(108,140,255,0.15); color: #9db2ff;
+  }
+  select.client-select {
+    padding: 7px 10px; border-radius: 7px; font-size: 15px; min-width: 160px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🗣️ STT — Huấn luyện &amp; Publish</h1>
+    <div class="who">Đăng nhập với <strong>{{ manager }}</strong> (manager)</div>
+  </div>
+  <div class="actions">
+    <a href="/">← Dashboard</a>
+    <button onclick="logout()">Đăng xuất</button>
+  </div>
+</header>
+
+<!-- ══ Create adapter ══ -->
+<div class="card">
+  <h2>➕ Tạo adapter mới (manager)</h2>
+  <p class="desc">Tier 1 (từ khoá) dùng ngay không cần huấn luyện. Tier 2 (LoRA) cần tải mẫu (audio, transcript) và bấm Huấn luyện. Adapter tạo ở đây thuộc về manager (không giới hạn số lượng như tài khoản khách).</p>
+  <div class="row">
+    <div class="field wide">
+      <label>Tên adapter</label>
+      <input type="text" id="newAdapterName" placeholder="vd: thuat-ngu-y-te" maxlength="100"/>
+    </div>
+    <div class="field">
+      <label>Base model (Tier 2)</label>
+      <select id="newAdapterBaseModel">
+        <option value="whisper-tiny">whisper-tiny</option>
+        <option value="whisper-base">whisper-base</option>
+      </select>
+    </div>
+    <button class="btn" onclick="createAdapter()">+ Tạo adapter</button>
+  </div>
+</div>
+
+<!-- ══ Training progress ══ -->
+<div class="card" id="trainingProgressCard" hidden>
+  <h2>⏳ Đang huấn luyện</h2>
+  <div id="trainingProgressList"></div>
+</div>
+
+<!-- ══ Manager's own adapters (full editor, same as STT Lab) ══ -->
+<div class="card">
+  <h2>📦 Adapter do bạn tạo</h2>
+  <p class="desc">Chỉnh từ khoá, mẫu huấn luyện, huấn luyện lại và publish thành model production cho một client — publish áp dụng cho mọi client gọi <span class="mono" style="font-family:'SF Mono',Consolas,monospace;">/api/transcribe</span>.</p>
+  <div id="ownAdaptersEmpty" class="empty" style="display:none;">Chưa có adapter nào do manager tạo — tạo một cái ở trên.</div>
+  <div id="ownAdaptersList"></div>
+</div>
+
+<!-- ══ Global table: every adapter, any owner ══ -->
+<div class="card">
+  <h2>🗂️ Toàn bộ STT adapter (mọi client)</h2>
+  <p class="desc">Mọi adapter Tier 2 đã tạo — của khách (STT Lab) lẫn của manager. Publish/unpublish trực tiếp từ đây, kể cả adapter do khách tự huấn luyện.</p>
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Tên</th><th>Base model</th><th>Trạng thái</th><th>Người tạo</th><th>Publish cho client</th><th></th></tr>
+      </thead>
+      <tbody id="globalAdaptersBody"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="globalAdaptersEmpty" style="display:none;">Chưa có adapter STT nào trong hệ thống.</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const MAX_HOTWORDS = {{ max_hotwords }};
+const MAX_STT_TRAIN_SAMPLES = {{ max_stt_train_samples }};
+const MIN_STT_TRAIN_SAMPLES = {{ min_stt_train_samples }};
+const CSRF_TOKEN = "{{ csrf_token }}";
+
+let pollTimer = null;
+let CLIENTS = [];
+
+function toast(msg, kind) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + (kind || 'ok');
+  t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.style.display = 'none', 4000);
+}
+
+async function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers, { 'X-CSRF-Token': CSRF_TOKEN });
+  const res = await fetch(path, opts);
+  if (res.status === 401) { window.location.href = '/login'; throw new Error('unauthorized'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+  return data;
+}
+
+function logout() {
+  fetch('/logout', { method: 'POST' }).then(() => window.location.href = '/login');
+}
+
+function escapeHtml(s) {
+  return (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+const STATUS_LABEL = { ready: 'Sẵn sàng', training: 'Đang huấn luyện', failed: 'Lỗi' };
+
+function clientOptionsHTML(selectedId) {
+  if (!CLIENTS.length) return '<option value="">— chưa có client nào —</option>';
+  return CLIENTS.map(c => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+}
+
+// Publish block shared by both the owned-adapter card and the global table --
+// only ready+trained adapters (adapter_path set) can be published, matching
+// the server-side check in POST /manager/stt/adapters/{id}/publish.
+function publishBlockHTML(a, compact) {
+  const canPublish = a.status === 'ready' && a.adapter_path;
+  if (a.is_published) {
+    return `
+      <span class="publish-badge">✅ Đang publish cho: ${escapeHtml(a.client_name || ('client #' + a.client_id))}</span>
+      <button class="btn ghost" data-action="unpublish" data-id="${a.id}">Unpublish</button>
+    `;
+  }
+  if (!canPublish) {
+    return `<span class="tag">Chỉ publish được khi adapter đã huấn luyện xong (Sẵn sàng)</span>`;
+  }
+  return `
+    <select class="client-select" data-id="${a.id}">${clientOptionsHTML(null)}</select>
+    <button class="btn" data-action="publish" data-id="${a.id}">Publish</button>
+  `;
+}
+
+function adapterCardHTML(a) {
+  const status = a.status || 'ready';
+  const locked = status === 'training';
+  const dis = locked ? 'disabled' : '';
+  return `
+    <div class="adapter-card" data-id="${a.id}">
+      <div class="adapter-head">
+        <span class="name">${escapeHtml(a.name)}</span>
+        <span class="tag">${escapeHtml(a.base_model)}</span>
+        <span class="status-pill ${status}">${STATUS_LABEL[status] || status}</span>
+        ${a.backend_used ? `<span class="tag">huấn luyện: ${escapeHtml(a.backend_used)}</span>` : ''}
+      </div>
+      ${a.progress_message && status === 'training' ? `<div class="progress-note">${escapeHtml(a.progress_message)}</div>` : ''}
+      ${a.error_message && status === 'failed' ? `<div class="error-note">${escapeHtml(a.error_message)}</div>` : ''}
+      ${locked ? `<div class="progress-note">Adapter đang huấn luyện — không thể sửa từ khoá/mẫu cho tới khi xong.</div>` : ''}
+
+      <div class="section-label">Từ khoá (Tier 1)</div>
+      <textarea class="hotwords" data-id="${a.id}" rows="3" ${dis}>${escapeHtml((a.hotwords || []).join('\n'))}</textarea>
+      <div class="hw-count" data-count-for="${a.id}"></div>
+      <div class="actions-row">
+        <button class="btn" data-action="save-hotwords" ${dis}>Lưu từ khoá</button>
+      </div>
+
+      <div class="section-label">Mẫu huấn luyện (Tier 2) — <span data-sample-count="${a.id}">…</span>/${MAX_STT_TRAIN_SAMPLES} đã tải lên</div>
+      <input type="text" class="sample-search" data-adapter-id="${a.id}" placeholder="Tìm theo từ khoá trong transcript…"/>
+      <div class="samples-list" data-samples-for="${a.id}"><div class="empty">Đang tải…</div></div>
+      <div class="file-hint">Tải lên 1 file âm thanh + transcript đúng của nó, để thêm vào mẫu huấn luyện:</div>
+      <div class="upload-row">
+        <input type="file" class="sample-audio" data-id="${a.id}" accept="audio/*" ${dis}/>
+        <input type="text" class="sample-text" data-id="${a.id}" placeholder="Transcript đúng cho mẫu này…" ${dis}/>
+        <button class="btn ghost" data-action="upload-sample" ${dis}>+ Thêm mẫu</button>
+      </div>
+
+      <div class="train-row">
+        <select class="inline backend-select" data-id="${a.id}" ${dis}>
+          <option value="auto">Tự động (Colab, dự phòng Local)</option>
+          <option value="colab">Bắt buộc Colab</option>
+          <option value="local">Bắt buộc Local</option>
+        </select>
+        <button class="btn" data-action="train" ${dis}>Huấn luyện</button>
+      </div>
+      <div class="file-hint">Hoặc: tải lên 1 file .stt-pack.zip đã tải xuống trước đó, để train tiếp từ adapter cũ:</div>
+      <div class="continue-row">
+        <input type="file" class="continue-pack" data-id="${a.id}" ${dis} accept=".zip"/>
+        <button class="btn ghost" data-action="continue" ${dis}>Train tiếp từ pack cũ</button>
+      </div>
+
+      <div class="section-label">Publish cho client (production /api/transcribe)</div>
+      <div class="publish-row" data-publish-for="${a.id}">${publishBlockHTML(a)}</div>
+
+      <div class="actions-row">
+        <button class="btn ghost" data-action="download">Tải xuống</button>
+        <button class="btn danger" data-action="delete">Xoá adapter</button>
+      </div>
+    </div>
+  `;
+}
+
+let _wasTraining = false;
+let _lastAdapters = [];
+
+async function loadClients() {
+  try {
+    CLIENTS = await api('/manager/clients');
+  } catch (e) { /* publish dropdowns just show empty -- table/cards still usable */ }
+}
+
+async function loadAdapters() {
+  try {
+    const adapters = await api('/manager/stt/adapters');
+    _lastAdapters = adapters;
+
+    const own = adapters.filter(a => !a.guest_username);
+    document.getElementById('ownAdaptersEmpty').style.display = own.length ? 'none' : 'block';
+    document.getElementById('ownAdaptersList').innerHTML = own.map(adapterCardHTML).join('');
+    own.forEach(a => {
+      updateHwCount(a.id);
+      loadSamples(a.id, a.status === 'training');
+    });
+
+    renderGlobalTable(adapters);
+
+    _wasTraining = adapters.some(a => a.status === 'training');
+    renderTrainingProgress(adapters);
+    clearTimeout(pollTimer);
+    if (_wasTraining) pollTimer = setTimeout(pollTrainingProgress, 3000);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function pollTrainingProgress() {
+  try {
+    const adapters = await api('/manager/stt/adapters');
+    _lastAdapters = adapters;
+    const anyTraining = adapters.some(a => a.status === 'training');
+    renderTrainingProgress(adapters);
+    renderGlobalTable(adapters);
+    clearTimeout(pollTimer);
+    if (anyTraining) {
+      pollTimer = setTimeout(pollTrainingProgress, 3000);
+    } else if (_wasTraining) {
+      loadAdapters();
+    }
+    _wasTraining = anyTraining;
+  } catch (e) { /* transient poll failure -- next tick retries */ }
+}
+
+function renderTrainingProgress(adapters) {
+  const training = adapters.filter(a => a.status === 'training');
+  const card = document.getElementById('trainingProgressCard');
+  const list = document.getElementById('trainingProgressList');
+  if (!training.length) { card.hidden = true; return; }
+  card.hidden = false;
+  list.innerHTML = training.map(a => `
+    <div class="training-item">
+      <div class="name">${escapeHtml(a.name)}${a.guest_username ? ` <span class="tag">khách: ${escapeHtml(a.guest_username)}</span>` : ' <span class="tag">manager</span>'}</div>
+      <div class="msg">${escapeHtml(a.progress_message || 'Đang xử lý…')}</div>
+      <div class="indeterminate-bar"></div>
+    </div>
+  `).join('');
+}
+
+function renderGlobalTable(adapters) {
+  const body = document.getElementById('globalAdaptersBody');
+  document.getElementById('globalAdaptersEmpty').style.display = adapters.length ? 'none' : 'block';
+  body.innerHTML = adapters.map(a => `
+    <tr data-global-row="${a.id}">
+      <td>${a.id}</td>
+      <td>${escapeHtml(a.name)}</td>
+      <td>${escapeHtml(a.base_model)}</td>
+      <td><span class="status-pill ${a.status}">${STATUS_LABEL[a.status] || a.status}</span></td>
+      <td>${a.guest_username ? `khách: ${escapeHtml(a.guest_username)}` : 'Manager'}</td>
+      <td colspan="2"><div class="publish-row" data-publish-for="${a.id}">${publishBlockHTML(a)}</div></td>
+    </tr>
+  `).join('');
+}
+
+function updateHwCount(id) {
+  const ta = document.querySelector(`textarea.hotwords[data-id="${id}"]`);
+  const label = document.querySelector(`[data-count-for="${id}"]`);
+  if (!ta || !label) return;
+  const n = ta.value.split('\n').map(s => s.trim()).filter(Boolean).length;
+  label.textContent = `${n} / ${MAX_HOTWORDS} từ khoá`;
+  label.className = 'hw-count' + (n > MAX_HOTWORDS ? ' over' : '');
+}
+
+const SAMPLES_PER_PAGE = 10;
+const _sampleState = {};
+
+async function loadSamples(adapterId, locked) {
+  try {
+    const samples = await api(`/manager/stt/adapters/${adapterId}/samples`);
+    const countEl = document.querySelector(`[data-sample-count="${adapterId}"]`);
+    if (countEl) countEl.textContent = samples.length;
+    const state = _sampleState[adapterId] || { page: 1, query: '' };
+    state.all = samples;
+    state.locked = !!locked;
+    _sampleState[adapterId] = state;
+    renderSamplesPage(adapterId);
+  } catch (e) { /* card may have been removed by a concurrent delete */ }
+}
+
+function renderSamplesPage(adapterId) {
+  const state = _sampleState[adapterId];
+  const box = document.querySelector(`[data-samples-for="${adapterId}"]`);
+  if (!state || !box) return;
+
+  const q = state.query.trim().toLowerCase();
+  const filtered = q ? state.all.filter(s => s.reference_text.toLowerCase().includes(q)) : state.all;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / SAMPLES_PER_PAGE));
+  state.page = Math.min(Math.max(1, state.page), totalPages);
+  const start = (state.page - 1) * SAMPLES_PER_PAGE;
+  const pageItems = filtered.slice(start, start + SAMPLES_PER_PAGE);
+  const locked = state.locked;
+
+  const rowsHtml = pageItems.length
+    ? pageItems.map(s => `
+        <tr data-sample-id="${s.id}">
+          <td class="audio-cell">
+            <audio controls preload="none" src="/manager/stt/adapters/${adapterId}/samples/${s.id}/audio"></audio>
+          </td>
+          <td class="transcript-cell">
+            <span class="txt-display">${escapeHtml(s.reference_text)}</span>
+            <textarea class="txt-edit" hidden>${escapeHtml(s.reference_text)}</textarea>
+          </td>
+          <td class="actions-cell">
+            ${locked ? '' : `
+            <span class="view-actions">
+              <button class="edit-sample" data-action="edit-sample" data-adapter-id="${adapterId}" data-sample-id="${s.id}">Sửa</button>
+              <button class="del-sample" data-action="delete-sample" data-adapter-id="${adapterId}" data-sample-id="${s.id}">Xoá</button>
+            </span>
+            <span class="edit-actions" hidden>
+              <button class="edit-sample" data-action="save-sample-edit" data-adapter-id="${adapterId}" data-sample-id="${s.id}">Lưu</button>
+              <button class="del-sample" data-action="cancel-sample-edit" data-adapter-id="${adapterId}" data-sample-id="${s.id}">Huỷ</button>
+            </span>`}
+          </td>
+        </tr>
+      `).join('')
+    : `<tr><td colspan="3" class="empty">${q ? 'Không tìm thấy mẫu nào khớp từ khoá.' : 'Chưa có mẫu nào.'}</td></tr>`;
+
+  box.innerHTML = `
+    <table class="samples-table">
+      <thead><tr><th>Âm thanh</th><th>Transcript</th><th></th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <div class="pager">
+      <button class="btn ghost" data-action="samples-prev" data-adapter-id="${adapterId}" ${state.page <= 1 ? 'disabled' : ''}>‹ Trước</button>
+      <span class="pager-info">Trang ${state.page}/${totalPages} — ${filtered.length} mẫu${q ? ` (lọc từ ${state.all.length})` : ''}</span>
+      <button class="btn ghost" data-action="samples-next" data-adapter-id="${adapterId}" ${state.page >= totalPages ? 'disabled' : ''}>Sau ›</button>
+    </div>
+  `;
+}
+
+async function saveSampleEdit(adapterId, sampleId) {
+  const row = document.querySelector(`tr[data-sample-id="${sampleId}"]`);
+  const text = row.querySelector('textarea.txt-edit').value.trim();
+  if (!text) { toast('Transcript không được để trống.', 'error'); return; }
+  try {
+    await api(`/manager/stt/adapters/${adapterId}/samples/${sampleId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reference_text: text }),
+    });
+    const state = _sampleState[adapterId];
+    const s = state && state.all.find(x => x.id === sampleId);
+    if (s) s.reference_text = text;
+    toast('Đã lưu transcript.');
+    renderSamplesPage(adapterId);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+document.getElementById('ownAdaptersList').addEventListener('input', (e) => {
+  if (e.target.matches('textarea.hotwords')) updateHwCount(Number(e.target.dataset.id));
+  if (e.target.matches('input.sample-search')) {
+    const id = Number(e.target.dataset.adapterId);
+    const state = _sampleState[id];
+    if (state) {
+      state.query = e.target.value;
+      state.page = 1;
+      renderSamplesPage(id);
+    }
+  }
+});
+
+async function publishAdapter(adapterId, clientId) {
+  if (!clientId) { toast('Chọn client trước khi publish.', 'error'); return; }
+  try {
+    await api(`/manager/stt/adapters/${adapterId}/publish`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: Number(clientId) }),
+    });
+    toast('Đã publish adapter cho client.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function unpublishAdapter(adapterId) {
+  try {
+    await api(`/manager/stt/adapters/${adapterId}/unpublish`, { method: 'POST' });
+    toast('Đã unpublish adapter.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function handleGlobalOrCardClick(e) {
+  const pubBtn = e.target.closest('button[data-action="publish"]');
+  if (pubBtn) {
+    const id = Number(pubBtn.dataset.id);
+    const select = pubBtn.closest('.publish-row').querySelector('.client-select');
+    publishAdapter(id, select ? select.value : null);
+    return true;
+  }
+  const unpubBtn = e.target.closest('button[data-action="unpublish"]');
+  if (unpubBtn) {
+    unpublishAdapter(Number(unpubBtn.dataset.id));
+    return true;
+  }
+  return false;
+}
+
+document.getElementById('globalAdaptersBody').addEventListener('click', handleGlobalOrCardClick);
+
+document.getElementById('ownAdaptersList').addEventListener('click', (e) => {
+  if (handleGlobalOrCardClick(e)) return;
+
+  const delBtn = e.target.closest('button[data-action="delete-sample"]');
+  if (delBtn) {
+    deleteSample(Number(delBtn.dataset.adapterId), Number(delBtn.dataset.sampleId));
+    return;
+  }
+  const editBtn = e.target.closest('button[data-action="edit-sample"]');
+  if (editBtn) {
+    const row = editBtn.closest('tr');
+    row.querySelector('.txt-display').hidden = true;
+    row.querySelector('.txt-edit').hidden = false;
+    row.querySelector('.view-actions').hidden = true;
+    row.querySelector('.edit-actions').hidden = false;
+    return;
+  }
+  const cancelBtn = e.target.closest('button[data-action="cancel-sample-edit"]');
+  if (cancelBtn) {
+    const row = cancelBtn.closest('tr');
+    row.querySelector('.txt-display').hidden = false;
+    row.querySelector('.txt-edit').hidden = true;
+    row.querySelector('.view-actions').hidden = false;
+    row.querySelector('.edit-actions').hidden = true;
+    return;
+  }
+  const saveBtn = e.target.closest('button[data-action="save-sample-edit"]');
+  if (saveBtn) {
+    saveSampleEdit(Number(saveBtn.dataset.adapterId), Number(saveBtn.dataset.sampleId));
+    return;
+  }
+  const prevBtn = e.target.closest('button[data-action="samples-prev"]');
+  if (prevBtn) {
+    const id = Number(prevBtn.dataset.adapterId);
+    if (_sampleState[id]) { _sampleState[id].page--; renderSamplesPage(id); }
+    return;
+  }
+  const nextBtn = e.target.closest('button[data-action="samples-next"]');
+  if (nextBtn) {
+    const id = Number(nextBtn.dataset.adapterId);
+    if (_sampleState[id]) { _sampleState[id].page++; renderSamplesPage(id); }
+    return;
+  }
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const card = btn.closest('.adapter-card');
+  const id = Number(card.dataset.id);
+  const name = card.querySelector('.name').textContent;
+  if (btn.dataset.action === 'save-hotwords') saveHotwords(id);
+  else if (btn.dataset.action === 'upload-sample') uploadSample(id);
+  else if (btn.dataset.action === 'train') trainAdapter(id);
+  else if (btn.dataset.action === 'continue') continueAdapter(id);
+  else if (btn.dataset.action === 'download') downloadAdapter(id);
+  else if (btn.dataset.action === 'delete') deleteAdapter(id, name);
+});
+
+async function createAdapter() {
+  const nameEl = document.getElementById('newAdapterName');
+  const name = nameEl.value.trim();
+  const baseModel = document.getElementById('newAdapterBaseModel').value;
+  if (!name) return;
+  try {
+    await api('/manager/stt/adapters', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, base_model: baseModel }),
+    });
+    nameEl.value = '';
+    toast('Đã tạo adapter.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveHotwords(id) {
+  const ta = document.querySelector(`textarea.hotwords[data-id="${id}"]`);
+  const hotwords = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+  try {
+    await api(`/manager/stt/adapters/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotwords }),
+    });
+    toast('Đã lưu từ khoá.');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function uploadSample(id) {
+  const audioEl = document.querySelector(`input.sample-audio[data-id="${id}"]`);
+  const textEl  = document.querySelector(`input.sample-text[data-id="${id}"]`);
+  const file = audioEl.files[0];
+  const text = textEl.value.trim();
+  if (!file) { toast('Chọn file âm thanh trước.', 'error'); return; }
+  if (!text) { toast('Nhập transcript cho mẫu này.', 'error'); return; }
+
+  const formData = new FormData();
+  formData.append('audio', file);
+  formData.append('reference_text', text);
+  try {
+    await api(`/manager/stt/adapters/${id}/samples`, { method: 'POST', body: formData });
+    audioEl.value = '';
+    textEl.value = '';
+    toast('Đã thêm mẫu.');
+    loadSamples(id);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteSample(adapterId, sampleId) {
+  try {
+    await api(`/manager/stt/adapters/${adapterId}/samples/${sampleId}`, { method: 'DELETE' });
+    loadSamples(adapterId);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function trainAdapter(id) {
+  const backend = document.querySelector(`select.backend-select[data-id="${id}"]`).value;
+  try {
+    await api(`/manager/stt/adapters/${id}/train`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend }),
+    });
+    toast('Đã bắt đầu huấn luyện.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function continueAdapter(id) {
+  const fileEl = document.querySelector(`input.continue-pack[data-id="${id}"]`);
+  const file = fileEl.files[0];
+  if (!file) { toast('Chọn file .stt-pack.zip trước.', 'error'); return; }
+
+  const formData = new FormData();
+  formData.append('pack', file);
+  try {
+    const res = await api(`/manager/stt/adapters/${id}/continue`, { method: 'POST', body: formData });
+    fileEl.value = '';
+    toast(res.message || 'Đã nạp adapter cũ.');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function downloadAdapter(id) {
+  window.location.href = `/manager/stt/adapters/${id}/download`;
+}
+
+async function deleteAdapter(id, name) {
+  if (!confirm(`Xoá adapter "${name}"? Không thể hoàn tác.`)) return;
+  try {
+    await api(`/manager/stt/adapters/${id}`, { method: 'DELETE' });
+    toast('Đã xoá adapter.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+loadClients().then(loadAdapters);
+</script>
+</body>
+</html>
