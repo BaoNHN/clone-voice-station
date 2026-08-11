@@ -245,6 +245,11 @@
       <input type="checkbox" id="logAutoScroll" checked/> Tự động cuộn xuống cuối
     </label>
   </div>
+  <div class="row" id="logFilterRow" style="margin-bottom:8px; gap:6px;">
+    <button class="btn ghost log-filter-btn" data-filter="all" onclick="setLogFilter('all')">Tất cả</button>
+    <button class="btn ghost log-filter-btn" data-filter="stt" onclick="setLogFilter('stt')">🗣️ Speech-to-Text</button>
+    <button class="btn ghost log-filter-btn" data-filter="voice" onclick="setLogFilter('voice')">🔊 Text-to-Speech / Giọng nói</button>
+  </div>
   <pre id="serverLogBox" style="background:#14141b; border:1px solid rgba(255,255,255,0.12);
        border-radius:8px; padding:12px; height:320px; overflow-y:auto; font-size:13px;
        line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0;
@@ -698,19 +703,52 @@ async function runRealismTest() {
 }
 
 // ── Server log ────────────────────────────────────────────────────────────────
+// Every log line carries a bracketed subsystem tag in the message text itself
+// (see engine/server_log.py's get_logger() docstring) -- [STT]/[STT-train:N]
+// for speech-to-text, [Voice]/[RVC]/[RVC-local] for the text-to-speech/
+// voice-cloning pipeline. The two were previously interleaved in one stream,
+// which made it hard to follow either one during a live training run.
+let _allLogLines = [];
+let _logFilter    = 'all';
+
+function logLineGroup(line) {
+  if (/\[STT/.test(line)) return 'stt';
+  if (/\[(Voice|RVC)/.test(line)) return 'voice';
+  return 'other';
+}
+
+function setLogFilter(filter) {
+  _logFilter = filter;
+  document.querySelectorAll('.log-filter-btn').forEach(btn => {
+    const active = btn.dataset.filter === filter;
+    btn.style.borderColor = active ? '#6c8cff' : 'rgba(255,255,255,0.15)';
+    btn.style.color       = active ? '#fff' : '#cfcfda';
+  });
+  renderServerLog();
+}
+
+function renderServerLog() {
+  const box = document.getElementById('serverLogBox');
+  const wasAtBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
+  const lines = _logFilter === 'all'
+    ? _allLogLines
+    : _allLogLines.filter(l => logLineGroup(l) === _logFilter);
+  box.textContent = lines.join('\n') || '(chưa có sự kiện nào)';
+  if (document.getElementById('logAutoScroll').checked && (wasAtBottom || box.dataset.firstLoad !== 'done')) {
+    box.scrollTop = box.scrollHeight;
+  }
+  box.dataset.firstLoad = 'done';
+}
+
 async function loadServerLogs() {
   try {
     const data = await api('/manager/logs');
-    const box = document.getElementById('serverLogBox');
-    const wasAtBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
-    box.textContent = (data.lines || []).join('\n') || '(chưa có sự kiện nào)';
-    if (document.getElementById('logAutoScroll').checked && (wasAtBottom || box.dataset.firstLoad !== 'done')) {
-      box.scrollTop = box.scrollHeight;
-    }
-    box.dataset.firstLoad = 'done';
+    _allLogLines = data.lines || [];
+    renderServerLog();
   } catch (e) { toast(e.message, 'error'); }
 }
 setInterval(loadServerLogs, 5000);
+setLogFilter('all');
 
 loadRvcConfig();
 loadClients();
