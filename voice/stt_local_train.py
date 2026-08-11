@@ -84,6 +84,29 @@ still need the guest to supply a second, separately-collected batch, which is a 
 change out of scope here. What Gate 2 adds is a real, if partial, backstop -- catching at
 least the case where an adapter overfits badly enough to also get worse at ordinary
 Vietnamese, which Gate 0/1 have no way to see at all.
+
+UPDATE (2026-08-12): Gate 2 removed, replaced by an optional `holdout_samples` param to
+train() -- a genuinely independent test set (e.g. a HuggingFace dataset's own official
+"test" split, disjoint recording sessions from whatever "train" split the guest's upload
+came from) supplied by the caller instead of carved out of the guest's own upload. When
+provided, it replaces Gate 1's TEST_* entirely (no more double-dipping risk to design
+around -- the accept/reject decision is now made on data that was never in the same
+upload/session as anything the model trained on, not an internal proxy split of it) and
+Gate 2 (VLSP2020 general-benchmark) is skipped. Rationale: Gate 1's own history above is
+double-edged -- the three-way split *by itself* was independently confirmed wrong in both
+directions on this same class of held-out-from-one-upload data (see TEST_FRACTION's
+comment below: an adapter Gate 1 rated as beating base by 9-15pp on its own split lost by
+20-26pp on a genuinely independent set, twice). A true external test set doesn't have that
+same-session/speaker proxy-error problem in the first place, which is a more direct fix
+than adding another fixed benchmark on top. This does trade away Gate 2's domain-agnostic
+"didn't get worse at Vietnamese in general" backstop -- appropriate when the actual
+deployment question is domain adaptation ("did this improve unseen target-domain speech
+vs. the base model"), not simultaneous general-capability preservation. When no
+holdout_samples are supplied (the common case -- a regular guest via the STT Lab page has
+no curated external test set), falls back to the original three-way-split Gate 1 alone
+(Gate 2 stays removed either way -- it was never a per-guest concept, and removing it
+without a same-quality replacement for the common case was judged better than keeping a
+check documented above as not fully reliable for what it needs to catch).
 """
 
 import os
@@ -130,8 +153,9 @@ _POLICY_BUCKETS = [
     # (min_samples, max_epochs, patience, lora_r)
     (10,  5,  2, 8),
     (50,  10, 3, 8),
-    (200, 20, 5, 16),
-    (500, 30, 5, 16),
+    (200, 20, 5, 16),  # top bucket -- covers 200 up through MAX_STT_TRAIN_SAMPLES (500);
+                        # a separate 500+ tier was removed 2026-08-12 since no upload can
+                        # ever actually exceed that hard per-adapter cap (database.py).
 ]
 
 
@@ -186,43 +210,10 @@ VAL_MAX_COUNT  = 30
 # on top of transformers, out of scope here.
 GENERATE_KWARGS = {"no_repeat_ngram_size": 3, "repetition_penalty": 1.3, "num_beams": 5}
 
-# Gate 2's fixed set -- see module docstring and tools/prepare_general_benchmark.py (the
-# script that provisions this directory; run once per deployment). Deliberately outside
-# STT_SAMPLES_DIR/STT_MODELS_DIR (database.py) and not exposed through any API route --
-# this is server-side fixture data, not per-guest state, and no guest's upload should ever
-# be able to write into or read out of it.
-GENERAL_BENCHMARK_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "stt_general_benchmark"
-)
-
-
-def _load_general_benchmark() -> list:
-    """[{"audio_path": str, "reference_text": str}, ...] from GENERAL_BENCHMARK_DIR's
-    (NNN.wav, NNN.txt) pairs -- same convention tools/import_hf_stt_dataset.py's
-    export_eval_set() and voice-lab-example/tools/test_medical_lora_wer.py use. Raises
-    rather than returning an empty/degraded set if the benchmark hasn't been provisioned:
-    Gate 2 existing specifically to catch what Gate 0/1 can't means silently
-    skipping it when missing would make that failure mode invisible again, exactly the
-    kind of silent gap the earlier gates were added to close. Run
-    tools/prepare_general_benchmark.py once to fix this instead of catching around it."""
-    import glob
-
-    pairs = []
-    for txt_path in sorted(glob.glob(os.path.join(GENERAL_BENCHMARK_DIR, "*.txt"))):
-        audio_path = os.path.splitext(txt_path)[0] + ".wav"
-        if not os.path.exists(audio_path):
-            continue
-        with open(txt_path, encoding="utf-8") as f:
-            reference_text = f.read().strip()
-        pairs.append({"audio_path": audio_path, "reference_text": reference_text})
-
-    if not pairs:
-        raise RuntimeError(
-            f"Gate 2's fixed general-Vietnamese benchmark is missing or empty at "
-            f"{GENERAL_BENCHMARK_DIR} -- run tools/prepare_general_benchmark.py once to "
-            f"provision it before training any Tier 2 adapter (see this module's docstring)."
-        )
-    return pairs
+# Gate 2 (fixed VLSP2020 general-Vietnamese benchmark) removed 2026-08-12 -- see module
+# docstring's "UPDATE" note. tools/prepare_general_benchmark.py and stt_general_benchmark/
+# are left in place (still useful as a standalone informational check, e.g. for a thesis
+# writeup), just no longer loaded or gated on here.
 
 
 def _normalize(text: str) -> list:
@@ -251,6 +242,20 @@ def _edit_distance(reference: str, hypothesis: str) -> tuple:
             else:
                 dp[i][j] = 1 + min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
     return dp[n][m], max(n, 1)
+
+
+def _split_train_val(samples: list) -> tuple:
+    """train_samples, val_samples (early-stopping) -- used instead of
+    _split_train_val_test() when the caller supplies its own holdout_samples (a
+    genuinely independent test set), so there's no need to also carve TEST_* out of
+    this pool. Same fixed seed/VAL_* sizing as the three-way split, for consistency."""
+    shuffled = samples[:]
+    random.Random(42).shuffle(shuffled)
+    val_count = min(VAL_MAX_COUNT, max(VAL_MIN_COUNT, round(len(shuffled) * VAL_FRACTION)))
+    val_count = min(val_count, len(shuffled) - 1)  # always leave at least 1 for training
+    val_samples = shuffled[:val_count]
+    train_samples = shuffled[val_count:]
+    return train_samples, val_samples
 
 
 def _split_train_val_test(samples: list) -> tuple:
@@ -304,41 +309,40 @@ def _evaluate_wer(model, processor, device, eval_samples: list) -> float:
 
 
 def train(adapter_id: int, samples: list, base_model: str, output_dir: str,
-          resume_from_path: str = None, progress_cb=None) -> str:
+          resume_from_path: str = None, progress_cb=None, holdout_samples: list = None) -> str:
     """
     Parameters
     ----------
     adapter_id       : int   For logging only.
-    samples          : list  [{"audio_path": str, "reference_text": str}, ...]
+    samples          : list  [{"audio_path": str, "reference_text": str}, ...] -- the
+                              trainable pool (early-stop split carved from this; also the
+                              final-gate split too, when holdout_samples is None).
     base_model       : str   One of database.ALLOWED_STT_BASE_MODELS ("whisper-tiny"/"whisper-base").
     output_dir       : str   Where to save the trained adapter (created if missing).
     resume_from_path : str   Directory of a previously-saved adapter (adapter_model.safetensors +
                               adapter_config.json) to continue training from, or None to start fresh.
     progress_cb       : callable(str)  Called with a human-readable status after every sample.
+    holdout_samples   : list  Optional genuinely independent test set (e.g. a dataset's own
+                              official "test" split) -- see module docstring's 2026-08-12
+                              update. When given, this becomes the final-gate split directly
+                              (no TEST_* carved from `samples`); when None, falls back to the
+                              original three-way split of `samples` alone.
 
     Returns
     -------
     str  output_dir, once the selected adapter is saved there -- selected by early-stop
          WER on one held-out split, then validated by beating the untrained base model's
-         WER on both a second, disjoint held-out split of the guest's own upload it had no
-         part in selecting, AND a fixed general-Vietnamese benchmark no guest's data ever
-         touches (see module docstring's "Gate 1"/"Gate 2" notes).
+         WER on the final-gate split (see holdout_samples above).
 
     Raises
     ------
     RuntimeError  if the epoch selected via early-stopping doesn't beat the base model's
-                  WER on the guest's own final-gate split, or doesn't beat it on the fixed
-                  general benchmark either -- nothing is saved in that case (see module
-                  docstring). Also raised up front if the general benchmark hasn't been
-                  provisioned at all (see _load_general_benchmark).
+                  WER on the final-gate split -- nothing is saved in that case (see module
+                  docstring).
     """
     hf_model_name = _HF_MODEL_BY_NAME.get(base_model)
     if not hf_model_name:
         raise ValueError(f"Unsupported base_model for local training: {base_model!r}")
-
-    # Fail fast, before any model download/GPU work, if Gate 2's fixture data is missing --
-    # see _load_general_benchmark's own docstring for why this raises instead of degrading.
-    general_samples = _load_general_benchmark()
 
     import copy
 
@@ -362,26 +366,27 @@ def train(adapter_id: int, samples: list, base_model: str, output_dir: str,
     base.generation_config.task = "transcribe"
     base.to(device)
 
-    train_samples, val_samples, test_samples = _split_train_val_test(samples)
+    if holdout_samples:
+        train_samples, val_samples = _split_train_val(samples)
+        test_samples = holdout_samples
+        test_kind = "mẫu test độc lập (holdout, chưa từng thấy trong lúc train)"
+    else:
+        train_samples, val_samples, test_samples = _split_train_val_test(samples)
+        test_kind = "mẫu kiểm định cuối (trích từ dữ liệu tải lên)"
+
     policy = _training_policy(len(samples))
     _report(f"Chia {len(train_samples)} mẫu huấn luyện / {len(val_samples)} mẫu early-stop / "
-            f"{len(test_samples)} mẫu kiểm định cuối (chính sách: tối đa {policy['max_epochs']} "
+            f"{len(test_samples)} {test_kind} (chính sách: tối đa {policy['max_epochs']} "
             f"epoch, patience {policy['patience']}, LoRA r={policy['lora_r']}, dựa trên "
             f"{len(samples)} mẫu)…")
 
-    # Baselines to beat: the untouched pretrained model, scored on both the final-gate test
-    # split (never the early-stop val split -- see module docstring) and the fixed Gate 2
-    # general benchmark, *before* any LoRA layer is attached -- get_peft_model() below
-    # monkeypatches base's own target-module submodules in place, so both have to run first
-    # to see the model's un-adapted output.
-    _report("Đo WER cơ sở của model gốc (chưa huấn luyện) trên tập kiểm định cuối…")
+    # Baseline to beat: the untouched pretrained model, scored on the final-gate test split
+    # (never the early-stop val split -- see module docstring), *before* any LoRA layer is
+    # attached -- get_peft_model() below monkeypatches base's own target-module submodules
+    # in place, so this has to run first to see the model's un-adapted output.
+    _report(f"Đo WER cơ sở của model gốc (chưa huấn luyện) trên {test_kind}…")
     base_wer = _evaluate_wer(base, processor, device, test_samples)
-    _report(f"WER cơ sở (model gốc, tập kiểm định cuối): {base_wer:.1f}%")
-
-    _report(f"Đo WER cơ sở của model gốc trên benchmark tiếng Việt tổng quát cố định "
-            f"({len(general_samples)} mẫu)…")
-    general_base_wer = _evaluate_wer(base, processor, device, general_samples)
-    _report(f"WER cơ sở (model gốc, benchmark tổng quát): {general_base_wer:.1f}%")
+    _report(f"WER cơ sở (model gốc): {base_wer:.1f}%")
 
     if resume_from_path and os.path.isdir(resume_from_path):
         _report(f"Tiếp tục huấn luyện từ adapter đã có ({resume_from_path})…")
@@ -456,34 +461,20 @@ def train(adapter_id: int, samples: list, base_model: str, output_dir: str,
     # above, so this is the first and only time this run's outcome is judged on data that
     # couldn't have been (even accidentally) optimized against. See module docstring.
     _report(f"Epoch tốt nhất theo early-stop là epoch {best_epoch} (WER early-stop {best_wer:.1f}%) "
-            f"— khôi phục trọng số và đo lại trên tập kiểm định cuối + benchmark tổng quát…")
+            f"— khôi phục trọng số và đo lại trên {test_kind}…")
     set_peft_model_state_dict(model, best_state)
     final_wer = _evaluate_wer(model, processor, device, test_samples)
-    general_wer = _evaluate_wer(model, processor, device, general_samples)
-    _report(f"WER kiểm định cuối: {final_wer:.1f}% (cơ sở {base_wer:.1f}%) — "
-            f"WER benchmark tổng quát: {general_wer:.1f}% (cơ sở {general_base_wer:.1f}%)")
+    _report(f"WER trên {test_kind}: {final_wer:.1f}% (cơ sở {base_wer:.1f}%)")
 
     if final_wer >= base_wer:
         raise RuntimeError(
-            f"Adapter bị từ chối: WER trên tập kiểm định cuối ({final_wer:.1f}%) không thắng "
+            f"Adapter bị từ chối: WER trên {test_kind} ({final_wer:.1f}%) không thắng "
             f"được model gốc ({base_wer:.1f}%) trên cùng tập đó. Không lưu adapter để tránh "
             f"làm nhận dạng tệ đi -- thử thêm mẫu huấn luyện đa dạng hơn, hoặc mẫu ngắn hơn."
-        )
-    # Gate 2: even an adapter that cleared Gate 1 (the guest's own held-out split) above
-    # must not have gotten worse at ordinary Vietnamese speech generally -- see module
-    # docstring for why Gate 1, alone, can't catch this (test_samples shares the guest's
-    # own upload batch with train_samples; general_samples shares nothing with it at all).
-    if general_wer >= general_base_wer:
-        raise RuntimeError(
-            f"Adapter bị từ chối: WER trên benchmark tiếng Việt tổng quát ({general_wer:.1f}%) "
-            f"không thắng được model gốc ({general_base_wer:.1f}%) trên cùng benchmark -- "
-            f"adapter có vẻ đã học lệch (overfit) và làm giảm chất lượng nhận dạng tiếng Việt "
-            f"nói chung, dù có cải thiện trên tập dữ liệu riêng của bạn. Không lưu adapter."
         )
 
     os.makedirs(output_dir, exist_ok=True)
     model.save_pretrained(output_dir)
-    _report(f"Đã lưu adapter (WER kiểm định cuối {final_wer:.1f}%, cải thiện "
-            f"{base_wer - final_wer:.1f}pp so với model gốc; WER benchmark tổng quát "
-            f"{general_wer:.1f}%, cải thiện {general_base_wer - general_wer:.1f}pp).")
+    _report(f"Đã lưu adapter (WER trên {test_kind}: {final_wer:.1f}%, cải thiện "
+            f"{base_wer - final_wer:.1f}pp so với model gốc).")
     return output_dir

@@ -62,8 +62,9 @@ MAX_STT_SAMPLE_DURATION_SEC = 30
 MAX_STT_ADAPTERS_PER_GUEST = 3
 ALLOWED_STT_BASE_MODELS = ("whisper-tiny", "whisper-base")
 
-# First client seeded on a fresh DB — matches the app this service was extracted from.
-DEFAULT_CLIENT_NAME = "rag-legal-assistant"
+# First client seeded on a fresh DB — matches the app this service was extracted from
+# (rag-legal-assistant), display-renamed to a clearer demo-facing label.
+DEFAULT_CLIENT_NAME = "Voice Rag example"
 
 # Default account for the manager dashboard, seeded on first init only.
 DEFAULT_MANAGER_USERNAME = "manager"
@@ -72,7 +73,13 @@ PBKDF2_ITERATIONS = 200_000
 
 
 def get_conn():
-    return sqlite3.connect(DB_NAME)
+    # timeout=30 (up from sqlite3's 5s default): confirmed for real that background
+    # training jobs (STT LoRA fine-tuning, RVC status polling) hold their own write
+    # connections open from a separate thread (BackgroundTasks/asyncio.to_thread)
+    # while a concurrent request -- e.g. tools/import_hf_stt_dataset.py's
+    # create_stt_adapter() call -- opens another, hitting "database is locked" at
+    # the default timeout. See init_db()'s WAL pragma for the other half of this fix.
+    return sqlite3.connect(DB_NAME, timeout=30)
 
 
 # =========================
@@ -97,7 +104,12 @@ def _verify_password(password: str, stored: str) -> bool:
 # INIT DATABASE
 # =========================
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
+    # WAL mode is stored in the database file itself (persists across connections/
+    # restarts once set), so this only needs to run once here -- lets concurrent
+    # readers proceed without blocking on an in-progress writer, the other half of
+    # the "database is locked" fix alongside get_conn()'s longer busy timeout.
+    conn.execute("PRAGMA journal_mode=WAL")
     c    = conn.cursor()
 
     c.execute("""
@@ -251,9 +263,18 @@ def init_db():
             adapter_id     INTEGER,
             audio_path     TEXT,
             reference_text TEXT,
-            created_at     REAL
+            created_at     REAL,
+            is_holdout     INTEGER DEFAULT 0
         )
     """)
+    # Migration for existing DBs missing is_holdout (added 2026-08-12 -- marks a sample as
+    # a genuinely independent test set, e.g. a HuggingFace dataset's own official "test"
+    # split, never trained on -- see voice/stt_local_train.py's train() holdout_samples
+    # param and its module docstring's "UPDATE" note).
+    try:
+        c.execute("ALTER TABLE stt_training_samples ADD COLUMN is_holdout INTEGER DEFAULT 0")
+    except Exception:
+        pass
 
     conn.commit()
 
@@ -308,7 +329,7 @@ def init_db():
 def get_client_by_api_key(api_key: str):
     if not api_key:
         return None
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     row  = conn.execute("SELECT id, name FROM clients WHERE api_key=?", (api_key,)).fetchone()
     conn.close()
     return {"id": row[0], "name": row[1]} if row else None
@@ -316,7 +337,7 @@ def get_client_by_api_key(api_key: str):
 
 def list_clients():
     """Manager-dashboard view: every registered client app and its API key."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     rows = conn.execute(
         "SELECT id, name, api_key, webhook_url, created_at FROM clients ORDER BY id ASC"
     ).fetchall()
@@ -327,7 +348,7 @@ def list_clients():
 def create_client(name: str) -> dict:
     """Registers a new client app (e.g. a new corporate integration) with a
     freshly generated API key. Raises ValueError if the name is already taken."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     if c.execute("SELECT 1 FROM clients WHERE name=?", (name,)).fetchone():
         conn.close()
@@ -347,7 +368,7 @@ def create_client(name: str) -> dict:
 def delete_client(client_id: int):
     """Refuses to delete a client that still has voice profiles registered —
     delete/reassign those first so their data isn't silently orphaned."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     in_use = conn.execute(
         "SELECT COUNT(*) FROM voice_profiles WHERE client_id=?", (client_id,)
     ).fetchone()[0]
@@ -360,7 +381,7 @@ def delete_client(client_id: int):
 
 
 def get_client(client_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     row  = conn.execute(
         "SELECT id, name, api_key, webhook_url, created_at FROM clients WHERE id=?", (client_id,)
     ).fetchone()
@@ -371,7 +392,7 @@ def get_client(client_id: int):
 
 
 def set_client_webhook(client_id: int, webhook_url: str):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.execute("UPDATE clients SET webhook_url=? WHERE id=?", (webhook_url or None, client_id))
     conn.commit()
     conn.close()
@@ -381,14 +402,14 @@ def set_client_webhook(client_id: int, webhook_url: str):
 # MANAGERS (dashboard login — separate from client apps' own users)
 # =========================
 def verify_manager_login(username: str, password: str) -> bool:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     row  = conn.execute("SELECT password_hash FROM managers WHERE username=?", (username,)).fetchone()
     conn.close()
     return bool(row and _verify_password(password, row[0]))
 
 
 def change_manager_password(username: str, new_password: str):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.execute(
         "UPDATE managers SET password_hash=? WHERE username=?",
         (_hash_password(new_password), username)
@@ -402,21 +423,32 @@ def change_manager_password(username: str, new_password: str):
 # =========================
 def create_stt_guest(username: str, password: str) -> int:
     """Raises sqlite3.IntegrityError if username is already taken — the
-    caller (app.py) turns that into a 409."""
-    conn = sqlite3.connect(DB_NAME)
-    c    = conn.cursor()
-    c.execute(
-        "INSERT INTO stt_guests (username, password_hash, created_at) VALUES (?,?,?)",
-        (username, _hash_password(password), time.time())
-    )
-    guest_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    return guest_id
+    caller (app.py) turns that into a 409.
+
+    Confirmed for real: without the try/finally, that expected IntegrityError
+    (thrown by the INSERT itself, on every registration attempt for a name
+    that's already taken) skipped conn.close() entirely, leaking an open
+    connection holding an unresolved transaction -- which then blocked every
+    other write against this SQLite database (WAL mode still only allows one
+    writer at a time) until the leaking process was killed. finally guarantees
+    the connection closes (rolling back the failed INSERT) whether or not it
+    raises."""
+    conn = get_conn()
+    try:
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO stt_guests (username, password_hash, created_at) VALUES (?,?,?)",
+            (username, _hash_password(password), time.time())
+        )
+        guest_id = c.lastrowid
+        conn.commit()
+        return guest_id
+    finally:
+        conn.close()
 
 
 def verify_stt_guest_login(username: str, password: str):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     row  = conn.execute(
         "SELECT id, password_hash FROM stt_guests WHERE username=?", (username,)
     ).fetchone()
@@ -442,7 +474,7 @@ def _stt_adapter_row_to_dict(row) -> dict:
 
 
 def list_stt_adapters(guest_id: int) -> list:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     rows = conn.execute(
         f"SELECT {_STT_ADAPTER_COLUMNS} FROM stt_adapters WHERE guest_id=? ORDER BY id ASC",
         (guest_id,)
@@ -452,7 +484,7 @@ def list_stt_adapters(guest_id: int) -> list:
 
 
 def get_stt_adapter(adapter_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     row  = conn.execute(
         f"SELECT {_STT_ADAPTER_COLUMNS} FROM stt_adapters WHERE id=?",
         (adapter_id,)
@@ -462,14 +494,14 @@ def get_stt_adapter(adapter_id: int):
 
 
 def count_stt_adapters(guest_id: int) -> int:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     n = conn.execute("SELECT COUNT(*) FROM stt_adapters WHERE guest_id=?", (guest_id,)).fetchone()[0]
     conn.close()
     return n
 
 
 def create_stt_adapter(guest_id: int, name: str, base_model: str = "whisper-tiny") -> int:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute(
         "INSERT INTO stt_adapters (guest_id, name, base_model, status, created_at) VALUES (?,?,?,?,?)",
@@ -482,14 +514,14 @@ def create_stt_adapter(guest_id: int, name: str, base_model: str = "whisper-tiny
 
 
 def rename_stt_adapter(adapter_id: int, name: str):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.execute("UPDATE stt_adapters SET name=? WHERE id=?", (name, adapter_id))
     conn.commit()
     conn.close()
 
 
 def update_stt_adapter_hotwords(adapter_id: int, hotwords: list):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.execute(
         "UPDATE stt_adapters SET hotwords_json=? WHERE id=?",
         (json.dumps(hotwords), adapter_id)
@@ -505,7 +537,7 @@ def update_stt_adapter_training(adapter_id: int, status: str, error_message: str
     represents the adapter's current state); adapter_path/backend_used only
     overwrite when actually provided, via COALESCE, so an in-progress poll
     update doesn't erase a previous successful training run's artifact path."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.execute(
         "UPDATE stt_adapters SET status=?, error_message=?, progress_message=?, "
         "adapter_path=COALESCE(?, adapter_path), backend_used=COALESCE(?, backend_used) WHERE id=?",
@@ -516,18 +548,18 @@ def update_stt_adapter_training(adapter_id: int, status: str, error_message: str
 
 
 def set_stt_adapter_resume_path(adapter_id: int, path: str):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.execute("UPDATE stt_adapters SET resume_from_path=? WHERE id=?", (path, adapter_id))
     conn.commit()
     conn.close()
 
 
-def add_stt_training_sample(adapter_id: int, audio_path: str, reference_text: str) -> int:
-    conn = sqlite3.connect(DB_NAME)
+def add_stt_training_sample(adapter_id: int, audio_path: str, reference_text: str, is_holdout: bool = False) -> int:
+    conn = get_conn()
     c    = conn.cursor()
     c.execute(
-        "INSERT INTO stt_training_samples (adapter_id, audio_path, reference_text, created_at) VALUES (?,?,?,?)",
-        (adapter_id, audio_path, reference_text, time.time())
+        "INSERT INTO stt_training_samples (adapter_id, audio_path, reference_text, created_at, is_holdout) VALUES (?,?,?,?,?)",
+        (adapter_id, audio_path, reference_text, time.time(), int(is_holdout))
     )
     sample_id = c.lastrowid
     conn.commit()
@@ -536,13 +568,16 @@ def add_stt_training_sample(adapter_id: int, audio_path: str, reference_text: st
 
 
 def _stt_sample_row_to_dict(row) -> dict:
-    return {"id": row[0], "adapter_id": row[1], "audio_path": row[2], "reference_text": row[3], "created_at": row[4]}
+    return {
+        "id": row[0], "adapter_id": row[1], "audio_path": row[2], "reference_text": row[3],
+        "created_at": row[4], "is_holdout": bool(row[5]),
+    }
 
 
 def list_stt_training_samples(adapter_id: int) -> list:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     rows = conn.execute(
-        "SELECT id, adapter_id, audio_path, reference_text, created_at "
+        "SELECT id, adapter_id, audio_path, reference_text, created_at, is_holdout "
         "FROM stt_training_samples WHERE adapter_id=? ORDER BY id ASC",
         (adapter_id,)
     ).fetchall()
@@ -551,19 +586,26 @@ def list_stt_training_samples(adapter_id: int) -> list:
 
 
 def get_stt_training_sample(sample_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     row = conn.execute(
-        "SELECT id, adapter_id, audio_path, reference_text, created_at FROM stt_training_samples WHERE id=?",
+        "SELECT id, adapter_id, audio_path, reference_text, created_at, is_holdout FROM stt_training_samples WHERE id=?",
         (sample_id,)
     ).fetchone()
     conn.close()
     return _stt_sample_row_to_dict(row) if row else None
 
 
+def update_stt_training_sample_text(sample_id: int, reference_text: str):
+    conn = get_conn()
+    conn.execute("UPDATE stt_training_samples SET reference_text=? WHERE id=?", (reference_text, sample_id))
+    conn.commit()
+    conn.close()
+
+
 def delete_stt_training_sample(sample_id: int):
     """Caller (app.py) removes the audio file from disk first — this only
     drops the DB row."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.execute("DELETE FROM stt_training_samples WHERE id=?", (sample_id,))
     conn.commit()
     conn.close()
@@ -573,7 +615,7 @@ def delete_stt_adapter(adapter_id: int):
     """Caller (app.py) removes sample audio files + the trained adapter
     directory from disk first — this only drops the DB rows (cascades
     stt_training_samples)."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.execute("DELETE FROM stt_training_samples WHERE adapter_id=?", (adapter_id,))
     conn.execute("DELETE FROM stt_adapters WHERE id=?", (adapter_id,))
     conn.commit()
@@ -585,7 +627,7 @@ def delete_stt_guest_account(guest_id: int):
     then the account itself — honors the commitment that a guest's data is
     theirs to erase completely, not just disable. Caller (app.py) removes
     files from disk first (needs the paths before the rows disappear)."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     conn.execute(
         "DELETE FROM stt_training_samples WHERE adapter_id IN "
         "(SELECT id FROM stt_adapters WHERE guest_id=?)",
@@ -602,7 +644,7 @@ def delete_stt_guest_account(guest_id: int):
 # =========================
 def create_notification(client_id: int, external_user_id: str, profile_id: int,
                          profile_name: str, event: str, message: str) -> int:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute(
         "INSERT INTO notifications (client_id, external_user_id, profile_id, profile_name, "
@@ -618,7 +660,7 @@ def create_notification(client_id: int, external_user_id: str, profile_id: int,
 def mark_notification_delivered(notification_id: int, client_id: int = None):
     """client_id, when given, scopes the update so one client can't ack another
     client's notification by guessing an id."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     if client_id is None:
         conn.execute("UPDATE notifications SET delivered_at=? WHERE id=?", (time.time(), notification_id))
     else:
@@ -633,7 +675,7 @@ def mark_notification_delivered(notification_id: int, client_id: int = None):
 def list_undelivered_notifications(client_id: int, external_user_id: str):
     """Polling fallback for a client app whose webhook is unset or was
     unreachable when the event fired."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     rows = conn.execute(
         "SELECT id, profile_id, profile_name, event, message, created_at FROM notifications "
         "WHERE client_id=? AND external_user_id=? AND delivered_at IS NULL ORDER BY created_at ASC",
@@ -650,14 +692,14 @@ def list_undelivered_notifications(client_id: int, external_user_id: str):
 # SETTINGS (key/value store)
 # =========================
 def get_setting(key: str, default: str = "") -> str:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     row  = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     conn.close()
     return row[0] if row and row[0] is not None else default
 
 
 def set_setting(key: str, value: str):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute(
         "INSERT INTO settings (key, value) VALUES (?,?) "
@@ -672,7 +714,7 @@ def set_setting(key: str, value: str):
 # VOICE CONSENT (disclaimer)
 # =========================
 def has_voice_consent(client_id: int, external_user_id: str) -> bool:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     row  = conn.execute(
         "SELECT consented_at FROM voice_consent WHERE client_id=? AND external_user_id=?",
         (client_id, external_user_id)
@@ -682,7 +724,7 @@ def has_voice_consent(client_id: int, external_user_id: str) -> bool:
 
 
 def record_voice_consent(client_id: int, external_user_id: str):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute(
         "INSERT INTO voice_consent (client_id, external_user_id, consented_at) VALUES (?,?,?) "
@@ -698,7 +740,7 @@ def record_voice_consent(client_id: int, external_user_id: str):
 # =========================
 def list_voice_profiles(client_id: int, external_user_id: str):
     """Built-in system voices + this end user's own cloned voices."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute(
         "SELECT id, client_id, external_user_id, name, kind, base_tts_voice, speaker_id, "
@@ -730,7 +772,7 @@ def _voice_profile_row_to_dict(r):
 
 
 def get_voice_profile(profile_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     row  = conn.execute(
         "SELECT id, client_id, external_user_id, name, kind, base_tts_voice, speaker_id, "
         "status, is_default, error_message, model_local_path, progress_message "
@@ -742,7 +784,7 @@ def get_voice_profile(profile_id: int):
 
 
 def count_cloned_voice_profiles(client_id: int, external_user_id: str) -> int:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     row  = conn.execute(
         "SELECT COUNT(*) FROM voice_profiles WHERE kind='cloned' AND client_id=? AND external_user_id=?",
         (client_id, external_user_id)
@@ -753,7 +795,7 @@ def count_cloned_voice_profiles(client_id: int, external_user_id: str) -> int:
 
 def create_voice_profile(client_id: int, external_user_id: str, name: str, base_tts_voice: str = None) -> int:
     """Creates a new 'cloned' voice profile (starts empty, status='new')."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute(
         "INSERT INTO voice_profiles (client_id, external_user_id, name, kind, base_tts_voice, status, created_at) "
@@ -767,7 +809,7 @@ def create_voice_profile(client_id: int, external_user_id: str, name: str, base_
 
 
 def rename_voice_profile(profile_id: int, name: str):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute("UPDATE voice_profiles SET name=? WHERE id=?", (name, profile_id))
     conn.commit()
@@ -778,7 +820,7 @@ def set_default_voice_profile(client_id: int, external_user_id: str, profile_id:
     """Unsets any previous default for this end user, then sets the given profile as default.
     A built-in voice can also be set default per-user via a synthetic row lookup — callers
     just pass the profile id shown in list_voice_profiles(client_id, external_user_id)."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute(
         "UPDATE voice_profiles SET is_default=0 "
@@ -793,7 +835,7 @@ def set_default_voice_profile(client_id: int, external_user_id: str, profile_id:
 def update_voice_profile_status(profile_id: int, status: str, speaker_id: str = None,
                                  error_message: str = None, model_local_path: str = None,
                                  progress_message: str = None):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
 
     fields = ["status=?"]
@@ -823,7 +865,7 @@ def update_voice_profile_status(profile_id: int, status: str, speaker_id: str = 
 def delete_voice_profile(profile_id: int):
     """Deletes a cloned voice profile, its samples rows, sample files on disk,
     and the locally-backed-up trained model (voice_storage/<speaker_id>/), if any."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     row = c.execute("SELECT model_local_path FROM voice_profiles WHERE id=?", (profile_id,)).fetchone()
     model_dir = row[0] if row else None
@@ -844,7 +886,7 @@ def delete_voice_profile(profile_id: int):
 def list_all_voice_profiles(client_id: int):
     """Admin view: every cloned voice profile belonging to this client, across all its
     end users."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute("""
         SELECT vp.id, vp.client_id, vp.external_user_id, vp.name, vp.kind, vp.base_tts_voice,
@@ -868,7 +910,7 @@ def list_all_voice_profiles(client_id: int):
 def list_all_voice_profiles_global():
     """Manager-dashboard view: every cloned voice profile across every client
     app, with the owning client's name attached."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute("""
         SELECT vp.id, vp.client_id, vp.external_user_id, vp.name, vp.kind, vp.base_tts_voice,
@@ -896,7 +938,7 @@ def list_all_voice_profiles_global():
 # VOICE SAMPLES
 # =========================
 def add_voice_sample(profile_id: int, script_id: str, file_path: str) -> int:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute(
         "INSERT INTO voice_samples (profile_id, script_id, file_path, created_at) VALUES (?,?,?,?)",
@@ -914,7 +956,7 @@ def add_voice_sample(profile_id: int, script_id: str, file_path: str) -> int:
 
 
 def list_voice_samples(profile_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     c.execute(
         "SELECT id, script_id, file_path, created_at FROM voice_samples WHERE profile_id=? ORDER BY created_at ASC",
@@ -926,7 +968,7 @@ def list_voice_samples(profile_id: int):
 
 
 def delete_voice_sample(sample_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     c    = conn.cursor()
     row  = c.execute("SELECT file_path FROM voice_samples WHERE id=?", (sample_id,)).fetchone()
     c.execute("DELETE FROM voice_samples WHERE id=?", (sample_id,))

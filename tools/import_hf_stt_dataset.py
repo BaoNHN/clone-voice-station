@@ -144,11 +144,11 @@ class StationSession:
         resp.raise_for_status()
         return resp.json()["adapter_id"]
 
-    def upload_sample(self, adapter_id: int, audio_bytes: bytes, reference_text: str):
+    def upload_sample(self, adapter_id: int, audio_bytes: bytes, reference_text: str, is_holdout: bool = False):
         resp = self.session.post(
             f"{self.base_url}/api/stt/adapters/{adapter_id}/samples",
             files={"audio": ("sample.wav", audio_bytes, "audio/wav")},
-            data={"reference_text": reference_text},
+            data={"reference_text": reference_text, "is_holdout": str(is_holdout).lower()},
             headers=self._headers(), timeout=30,
         )
         resp.raise_for_status()
@@ -206,7 +206,13 @@ def import_training_samples(station: StationSession, adapter_id: int, dataset: s
     return uploaded
 
 
-def export_eval_set(dataset: str, limit: int, eval_dir: str):
+def export_eval_set(dataset: str, limit: int, eval_dir: str, station: "StationSession" = None, adapter_id: int = None):
+    """Writes the dataset's official "test" split to eval_dir (for
+    voice-lab-example/tools/test_medical_lora_wer.py's standalone comparison), and --
+    when station/adapter_id are given -- ALSO uploads the same rows to the adapter as
+    is_holdout=True samples, so voice/stt_local_train.py's train() can gate directly
+    against this genuinely independent set instead of an internal proxy split (see that
+    module's docstring). Same rows either way -- one export, two destinations."""
     print(f"Fetching up to {limit} held-out rows from {dataset} (split=test)...")
     os.makedirs(eval_dir, exist_ok=True)
     rows = fetch_rows(dataset, "test", offset=0, length=int(limit * 1.3) + 5)
@@ -228,15 +234,18 @@ def export_eval_set(dataset: str, limit: int, eval_dir: str):
             f.write(audio_bytes)
         with open(os.path.join(eval_dir, f"{stem}.txt"), "w", encoding="utf-8") as f:
             f.write(row["text"])
+        if station is not None and adapter_id is not None:
+            station.upload_sample(adapter_id, audio_bytes, row["text"], is_holdout=True)
         saved += 1
-        print(f"  [{saved}/{limit}] {stem}.wav ({duration:.1f}s)")
+        print(f"  [{saved}/{limit}] {stem}.wav ({duration:.1f}s)"
+              f"{' (+ uploaded as holdout)' if station is not None else ''}")
     print(f"Eval set written to {eval_dir} ({saved} pairs) -- point "
           f"voice-lab-example/tools/test_medical_lora_wer.py at this directory.")
     return saved
 
 
 def wait_for_training(station: StationSession, adapter_id: int):
-    print("Training started (backend=local) -- polling status...")
+    print("Training started -- polling status (see 'backend_used' once it reports ready)...")
     while True:
         time.sleep(POLL_INTERVAL_SEC)
         try:
@@ -271,6 +280,8 @@ def main():
     ap.add_argument("--eval-limit", type=int, default=30, help="Held-out test samples to export (default 30)")
     ap.add_argument("--eval-dir", default=os.path.join(os.path.dirname(__file__), "medical_eval_set"))
     ap.add_argument("--train", action="store_true", help="Kick off training and wait for it to finish")
+    ap.add_argument("--backend", default="local", choices=("auto", "colab", "local"),
+                     help="Training backend, same choices as the STT Lab page itself (default: local)")
     ap.add_argument("--download-pack", default=None, help="Path to save the .stt-pack.zip once ready")
     args = ap.parse_args()
 
@@ -290,10 +301,10 @@ def main():
     print(f"Created adapter #{adapter_id} ({args.base_model}).")
 
     import_training_samples(station, adapter_id, args.dataset, args.train_limit)
-    export_eval_set(args.dataset, args.eval_limit, args.eval_dir)
+    export_eval_set(args.dataset, args.eval_limit, args.eval_dir, station=station, adapter_id=adapter_id)
 
     if args.train:
-        station.start_training(adapter_id, backend="local")
+        station.start_training(adapter_id, backend=args.backend)
         wait_for_training(station, adapter_id)
 
         if args.download_pack:

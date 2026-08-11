@@ -42,6 +42,7 @@ from database.database import (
     MIN_STT_TRAIN_SAMPLES, MAX_STT_TRAIN_SAMPLES, MAX_STT_SAMPLE_DURATION_SEC,
     STT_SAMPLES_DIR, STT_MODELS_DIR,
     add_stt_training_sample, list_stt_training_samples, get_stt_training_sample,
+    update_stt_training_sample_text,
     delete_stt_training_sample, set_stt_adapter_resume_path,
 )
 from voice import rvc_client, stt
@@ -924,6 +925,16 @@ def _get_owned_stt_adapter(adapter_id: int, guest_id: int) -> dict:
     return adapter
 
 
+def _reject_if_training(adapter: dict):
+    """Guards every hotwords/sample mutation below -- the frontend already disables
+    these controls while status=='training' (see stt_guest_dashboard.html), but that
+    alone doesn't stop a direct API call, and editing the data out from under an
+    in-progress local/Colab training run is exactly the confusing case a guest asked
+    this to prevent."""
+    if adapter.get("status") == "training":
+        raise HTTPException(status_code=400, detail="Adapter đang huấn luyện -- không thể sửa lúc này.")
+
+
 @app.post("/api/stt/adapters")
 async def create_stt_adapter_route(request: Request, guest_id: int = Depends(require_stt_guest)):
     data = await request.json()
@@ -951,7 +962,7 @@ async def get_stt_adapter_route(adapter_id: int, guest_id: int = Depends(require
 
 @app.put("/api/stt/adapters/{adapter_id}")
 async def update_stt_adapter_route(adapter_id: int, request: Request, guest_id: int = Depends(require_stt_guest)):
-    _get_owned_stt_adapter(adapter_id, guest_id)
+    adapter = _get_owned_stt_adapter(adapter_id, guest_id)
     data = await request.json()
     if "name" in data:
         name = (data.get("name") or "").strip()
@@ -959,6 +970,7 @@ async def update_stt_adapter_route(adapter_id: int, request: Request, guest_id: 
             raise HTTPException(status_code=400, detail="Tên adapter phải dài 1-100 ký tự.")
         rename_stt_adapter(adapter_id, name)
     if "hotwords" in data:
+        _reject_if_training(adapter)
         update_stt_adapter_hotwords(adapter_id, _clean_hotwords(data.get("hotwords")))
     return {"status": "ok"}
 
@@ -966,8 +978,10 @@ async def update_stt_adapter_route(adapter_id: int, request: Request, guest_id: 
 # ── STT Lab: training samples + Tier 2 (LoRA fine-tune) ────────────────────────
 @app.post("/api/stt/adapters/{adapter_id}/samples")
 async def upload_stt_sample_route(adapter_id: int, reference_text: str = Form(...),
-                                   audio: UploadFile = File(...), guest_id: int = Depends(require_stt_guest)):
-    _get_owned_stt_adapter(adapter_id, guest_id)
+                                   audio: UploadFile = File(...), is_holdout: bool = Form(False),
+                                   guest_id: int = Depends(require_stt_guest)):
+    adapter = _get_owned_stt_adapter(adapter_id, guest_id)
+    _reject_if_training(adapter)
     reference_text = reference_text.strip()
     if not reference_text:
         raise HTTPException(status_code=400, detail="Cần nhập transcript cho mẫu ghi âm.")
@@ -992,7 +1006,7 @@ async def upload_stt_sample_route(adapter_id: int, reference_text: str = Form(..
         os.remove(sample_path)
         raise HTTPException(status_code=400, detail=f"Mẫu ghi âm tối đa {MAX_STT_SAMPLE_DURATION_SEC} giây.")
 
-    sample_id = add_stt_training_sample(adapter_id, sample_path, reference_text)
+    sample_id = add_stt_training_sample(adapter_id, sample_path, reference_text, is_holdout=is_holdout)
     return {"status": "ok", "sample_id": sample_id}
 
 
@@ -1002,9 +1016,36 @@ async def list_stt_samples_route(adapter_id: int, guest_id: int = Depends(requir
     return list_stt_training_samples(adapter_id)
 
 
+@app.get("/api/stt/adapters/{adapter_id}/samples/{sample_id}/audio")
+async def stt_sample_audio_route(adapter_id: int, sample_id: int, guest_id: int = Depends(require_stt_guest)):
+    _get_owned_stt_adapter(adapter_id, guest_id)
+    sample = get_stt_training_sample(sample_id)
+    if not sample or sample["adapter_id"] != adapter_id or not os.path.exists(sample["audio_path"]):
+        raise HTTPException(status_code=404, detail="Không tìm thấy file mẫu ghi âm.")
+    mime = mimetypes.guess_type(sample["audio_path"])[0] or "application/octet-stream"
+    return FileResponse(sample["audio_path"], media_type=mime)
+
+
+@app.put("/api/stt/adapters/{adapter_id}/samples/{sample_id}")
+async def update_stt_sample_route(adapter_id: int, sample_id: int, request: Request,
+                                   guest_id: int = Depends(require_stt_guest)):
+    adapter = _get_owned_stt_adapter(adapter_id, guest_id)
+    _reject_if_training(adapter)
+    sample = get_stt_training_sample(sample_id)
+    if not sample or sample["adapter_id"] != adapter_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy mẫu.")
+    data = await request.json()
+    reference_text = (data.get("reference_text") or "").strip()
+    if not reference_text:
+        raise HTTPException(status_code=400, detail="Cần nhập transcript cho mẫu ghi âm.")
+    update_stt_training_sample_text(sample_id, reference_text)
+    return {"status": "ok"}
+
+
 @app.delete("/api/stt/adapters/{adapter_id}/samples/{sample_id}")
 async def delete_stt_sample_route(adapter_id: int, sample_id: int, guest_id: int = Depends(require_stt_guest)):
-    _get_owned_stt_adapter(adapter_id, guest_id)
+    adapter = _get_owned_stt_adapter(adapter_id, guest_id)
+    _reject_if_training(adapter)
     sample = get_stt_training_sample(sample_id)
     if not sample or sample["adapter_id"] != adapter_id:
         raise HTTPException(status_code=404, detail="Không tìm thấy mẫu.")

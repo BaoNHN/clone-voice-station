@@ -68,7 +68,7 @@ def _zip_dir(path: str) -> bytes:
 _local_queue = queue.Queue()
 
 
-def _run_local(adapter_id: int, samples: list, base_model: str, resume_from_path: str):
+def _run_local(adapter_id: int, samples: list, base_model: str, resume_from_path: str, holdout_samples: list = None):
     output_dir = _adapter_output_dir(adapter_id)
 
     def _report_progress(msg: str):
@@ -78,6 +78,7 @@ def _run_local(adapter_id: int, samples: list, base_model: str, resume_from_path
         stt_local_train.train(
             adapter_id, samples, base_model, output_dir,
             resume_from_path=resume_from_path, progress_cb=_report_progress,
+            holdout_samples=holdout_samples,
         )
         update_stt_adapter_training(
             adapter_id, "ready", adapter_path=output_dir, backend_used="local",
@@ -91,9 +92,9 @@ def _run_local(adapter_id: int, samples: list, base_model: str, resume_from_path
 
 def _local_worker_loop():
     while True:
-        adapter_id, samples, base_model, resume_from_path = _local_queue.get()
+        adapter_id, samples, base_model, resume_from_path, holdout_samples = _local_queue.get()
         try:
-            _run_local(adapter_id, samples, base_model, resume_from_path)
+            _run_local(adapter_id, samples, base_model, resume_from_path, holdout_samples)
         finally:
             _local_queue.task_done()
 
@@ -101,9 +102,10 @@ def _local_worker_loop():
 threading.Thread(target=_local_worker_loop, daemon=True).start()
 
 
-def _enqueue_local(adapter_id: int, samples: list, base_model: str, resume_from_path: str, note: str):
+def _enqueue_local(adapter_id: int, samples: list, base_model: str, resume_from_path: str, note: str,
+                    holdout_samples: list = None):
     update_stt_adapter_training(adapter_id, "training", progress_message=note)
-    _local_queue.put((adapter_id, samples, base_model, resume_from_path))
+    _local_queue.put((adapter_id, samples, base_model, resume_from_path, holdout_samples))
 
 
 # ── Colab polling ─────────────────────────────────────────────────────────
@@ -154,7 +156,12 @@ def run_training(adapter_id: int, backend: str = "auto"):
     if not adapter:
         return
 
-    samples = _load_samples(adapter_id)
+    all_samples = _load_samples(adapter_id)
+    # is_holdout samples (a genuinely independent test set, e.g. a HuggingFace dataset's
+    # own official "test" split -- see voice/stt_local_train.py's train() docstring) are
+    # never part of the trainable pool, only the final gate.
+    samples = [s for s in all_samples if not s.get("is_holdout")]
+    holdout_samples = [s for s in all_samples if s.get("is_holdout")]
     if len(samples) < MIN_STT_TRAIN_SAMPLES:
         update_stt_adapter_training(
             adapter_id, "failed",
@@ -167,10 +174,14 @@ def run_training(adapter_id: int, backend: str = "auto"):
     update_stt_adapter_training(adapter_id, "training", progress_message="Đang bắt đầu…")
 
     if backend == "local":
-        _enqueue_local(adapter_id, samples, base_model, resume_from_path, "Đang chờ trong hàng đợi cục bộ…")
+        _enqueue_local(adapter_id, samples, base_model, resume_from_path, "Đang chờ trong hàng đợi cục bộ…",
+                        holdout_samples=holdout_samples)
         return
 
-    # backend in ("colab", "auto") -- try Colab
+    # backend in ("colab", "auto") -- try Colab. Colab's own training pipeline (see
+    # colab/voice_server.ipynb) doesn't yet support a holdout-based gate -- out of scope
+    # here -- so holdout samples are excluded from what gets uploaded rather than silently
+    # trained on (which would defeat their whole purpose).
     colab_samples = []
     for s in samples:
         with open(s["audio_path"], "rb") as f:
@@ -197,4 +208,5 @@ def run_training(adapter_id: int, backend: str = "auto"):
     _enqueue_local(
         adapter_id, samples, base_model, resume_from_path,
         "Colab không khả dụng — đang xếp hàng huấn luyện cục bộ…",
+        holdout_samples=holdout_samples,
     )
