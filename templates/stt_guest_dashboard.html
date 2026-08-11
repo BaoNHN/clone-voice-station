@@ -13,11 +13,12 @@
   header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
   header h1 { font-size: 20px; margin: 0; }
   header .who { font-size: 15px; color: #9a9aa8; }
-  header .actions button {
+  header .actions button, header .actions a {
     background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #cfcfda;
     padding: 6px 12px; border-radius: 7px; font-size: 15px; cursor: pointer; margin-left: 8px;
+    text-decoration: none; display: inline-block;
   }
-  header .actions button:hover { border-color: #6c8cff; color: #fff; }
+  header .actions button:hover, header .actions a:hover { border-color: #6c8cff; color: #fff; }
   header .actions button.danger { border-color: rgba(217,76,76,0.4); color: #ff8a8a; }
   header .actions button.danger:hover { border-color: #e86868; color: #fff; }
 
@@ -65,7 +66,7 @@
     font-family: inherit; resize: vertical;
   }
   textarea.hotwords:focus { outline: none; border-color: #6c8cff; }
-  .hw-count { font-size: 13px; color: #9a9aa8; margin-top: 4px; }
+  .hw-count { font-size: 15px; color: #9a9aa8; margin-top: 4px; }
   .hw-count.over { color: #ff8a8a; }
 
   .toast {
@@ -86,31 +87,76 @@
   .adapter-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
   .adapter-head .name { font-family: "SF Mono", Consolas, monospace; font-size: 16px; }
   .tag {
-    font-size: 12.5px; padding: 2px 8px; border-radius: 999px;
+    font-size: 15px; padding: 2px 8px; border-radius: 999px;
     background: rgba(150,150,170,0.15); color: #b6b6c2;
   }
-  .status-pill { font-size: 12.5px; padding: 2px 9px; border-radius: 999px; }
+  .status-pill { font-size: 15px; padding: 2px 9px; border-radius: 999px; }
   .status-pill.ready      { background: rgba(80,200,120,0.15); color: #6fe08a; }
   .status-pill.training   { background: rgba(255,196,0,0.15); color: #ffd25a; }
   .status-pill.failed     { background: rgba(217,76,76,0.15); color: #ff8a8a; }
-  .progress-note { font-size: 13.5px; color: #9a9aa8; margin: 4px 0 10px; }
-  .error-note     { font-size: 13.5px; color: #ff8a8a; margin: 4px 0 10px; }
+  .progress-note { font-size: 15px; color: #9a9aa8; margin: 4px 0 10px; }
+
+  /* ── Dedicated training-progress card (separate from the adapter list, see
+     trainingProgressCard) -- an indeterminate bar since progress messages are
+     free-text (epoch/sample counts embedded in Vietnamese, not a clean %). ── */
+  .training-item { margin-bottom: 14px; }
+  .training-item:last-child { margin-bottom: 0; }
+  .training-item .name { font-family: "SF Mono", Consolas, monospace; font-size: 16px; margin-bottom: 4px; }
+  .training-item .msg { font-size: 15px; color: #9a9aa8; margin-bottom: 6px; }
+  .indeterminate-bar {
+    height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden;
+  }
+  .indeterminate-bar::after {
+    content: ""; display: block; height: 100%; width: 40%; border-radius: 999px;
+    background: linear-gradient(90deg, #6c8cff, #86a2ff);
+    animation: indeterminate-slide 1.4s ease-in-out infinite;
+  }
+  @keyframes indeterminate-slide {
+    0%   { margin-left: -40%; }
+    100% { margin-left: 100%; }
+  }
+  .error-note     { font-size: 15px; color: #ff8a8a; margin: 4px 0 10px; }
 
   .section-label {
-    font-size: 12.5px; color: #77778a; text-transform: uppercase; letter-spacing: .03em;
+    font-size: 15px; color: #77778a; text-transform: uppercase; letter-spacing: .03em;
     margin: 14px 0 6px;
   }
-  .samples-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-  .sample-row {
-    display: flex; align-items: center; gap: 8px; font-size: 14px;
-    background: #14141b; border-radius: 6px; padding: 6px 10px;
+  /* ── Training-sample table: paginated + searchable (was an unpaginated flat
+     list -- unreadable once an adapter has hundreds of samples, see
+     tools/import_hf_stt_dataset.py's 400-sample imports). ── */
+  input.sample-search {
+    width: 100%; padding: 7px 10px; border-radius: 7px; font-size: 15px; margin-bottom: 8px;
+    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
   }
-  .sample-row .txt { flex: 1; color: #cfcfda; }
-  .sample-row button { background: transparent; border: none; color: #ff8a8a; cursor: pointer; font-size: 13px; }
+  input.sample-search:focus { outline: none; border-color: #6c8cff; }
+  table.samples-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  table.samples-table th {
+    font-size: 15px; color: #77778a; text-transform: uppercase; letter-spacing: .03em;
+    text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+  table.samples-table td {
+    font-size: 15px; color: #cfcfda; padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);
+    vertical-align: top;
+  }
+  table.samples-table td.audio-cell { width: 1%; white-space: nowrap; }
+  table.samples-table td.audio-cell audio { height: 32px; max-width: 220px; }
+  table.samples-table td.actions-cell { width: 1%; white-space: nowrap; text-align: right; }
+  table.samples-table textarea.txt-edit {
+    width: 100%; min-height: 60px; padding: 6px 8px; border-radius: 6px; font-size: 15px;
+    background: #14141b; border: 1.5px solid #6c8cff; color: #e8e8ec; font-family: inherit; resize: vertical;
+  }
+  table.samples-table button.del-sample, table.samples-table button.edit-sample {
+    background: transparent; border: none; cursor: pointer; font-size: 15px; margin-left: 6px;
+  }
+  table.samples-table button.del-sample { color: #ff8a8a; }
+  table.samples-table button.edit-sample { color: #6c8cff; }
+  .pager { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .pager-info { font-size: 15px; color: #9a9aa8; }
 
+  .file-hint { font-size: 15px; color: #77778a; margin: 10px 0 4px; }
   .upload-row, .train-row, .continue-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
   .upload-row input[type="text"] {
-    flex: 1; min-width: 180px; padding: 7px 10px; border-radius: 7px; font-size: 14px;
+    flex: 1; min-width: 180px; padding: 7px 10px; border-radius: 7px; font-size: 15px;
     background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
   }
   .actions-row { display: flex; gap: 8px; margin-top: 10px; }
@@ -124,6 +170,11 @@
     <div class="who">Đăng nhập với <strong>{{ guest_username }}</strong></div>
   </div>
   <div class="actions">
+    <!-- STT Lab is a self-contained guest area with no other link out of it --
+         a real user got here from /login (manager) with no way back, and separately
+         had no way to tell the two login pages apart (see login.html/
+         stt_guest_login.html's own cross-links, added for the same reason). -->
+    <a href="/login">Trang quản trị</a>
     <button onclick="logout()">Đăng xuất</button>
     <button class="danger" onclick="deleteAccount()">Xoá tài khoản &amp; toàn bộ dữ liệu</button>
   </div>
@@ -147,6 +198,16 @@
     </div>
     <button class="btn" onclick="createAdapter()">+ Tạo adapter</button>
   </div>
+</div>
+
+<!-- ══ Training progress -- updated on its own light poll (every 3s) so an
+     in-progress training run doesn't force a full re-render of the adapters
+     list below (which used to reset scroll position, open edit boxes, and
+     audio players on every single poll tick). The full list only re-renders
+     once, when a run actually finishes. ══ -->
+<div class="card" id="trainingProgressCard" hidden>
+  <h2>⏳ Đang huấn luyện</h2>
+  <div id="trainingProgressList"></div>
 </div>
 
 <!-- ══ Adapters ══ -->
@@ -208,6 +269,8 @@ const STATUS_LABEL = { ready: 'Sẵn sàng', training: 'Đang huấn luyện', f
 
 function adapterCardHTML(a) {
   const status = a.status || 'ready';
+  const locked = status === 'training';
+  const dis = locked ? 'disabled' : '';
   return `
     <div class="adapter-card" data-id="${a.id}">
       <div class="adapter-head">
@@ -218,33 +281,37 @@ function adapterCardHTML(a) {
       </div>
       ${a.progress_message && status === 'training' ? `<div class="progress-note">${escapeHtml(a.progress_message)}</div>` : ''}
       ${a.error_message && status === 'failed' ? `<div class="error-note">${escapeHtml(a.error_message)}</div>` : ''}
+      ${locked ? `<div class="progress-note">Adapter đang huấn luyện — không thể sửa từ khoá/mẫu cho tới khi xong, để tránh sửa dữ liệu ngay dưới một job đang chạy.</div>` : ''}
 
       <div class="section-label">Từ khoá (Tier 1)</div>
-      <textarea class="hotwords" data-id="${a.id}" rows="3">${escapeHtml((a.hotwords || []).join('\n'))}</textarea>
+      <textarea class="hotwords" data-id="${a.id}" rows="3" ${dis}>${escapeHtml((a.hotwords || []).join('\n'))}</textarea>
       <div class="hw-count" data-count-for="${a.id}"></div>
       <div class="actions-row">
-        <button class="btn" data-action="save-hotwords">Lưu từ khoá</button>
+        <button class="btn" data-action="save-hotwords" ${dis}>Lưu từ khoá</button>
       </div>
 
-      <div class="section-label">Mẫu huấn luyện (Tier 2) — <span data-sample-count="${a.id}">…</span>/${MAX_STT_TRAIN_SAMPLES}</div>
+      <div class="section-label">Mẫu huấn luyện (Tier 2) — <span data-sample-count="${a.id}">…</span>/${MAX_STT_TRAIN_SAMPLES} đã tải lên (giới hạn/adapter)</div>
+      <input type="text" class="sample-search" data-adapter-id="${a.id}" placeholder="Tìm theo từ khoá trong transcript…"/>
       <div class="samples-list" data-samples-for="${a.id}"><div class="empty">Đang tải…</div></div>
+      <div class="file-hint">Tải lên 1 file âm thanh + transcript đúng của nó, để thêm vào mẫu huấn luyện:</div>
       <div class="upload-row">
-        <input type="file" class="sample-audio" data-id="${a.id}" accept="audio/*"/>
-        <input type="text" class="sample-text" data-id="${a.id}" placeholder="Transcript đúng cho mẫu này…"/>
-        <button class="btn ghost" data-action="upload-sample">+ Thêm mẫu</button>
+        <input type="file" class="sample-audio" data-id="${a.id}" accept="audio/*" ${dis}/>
+        <input type="text" class="sample-text" data-id="${a.id}" placeholder="Transcript đúng cho mẫu này…" ${dis}/>
+        <button class="btn ghost" data-action="upload-sample" ${dis}>+ Thêm mẫu</button>
       </div>
 
       <div class="train-row">
-        <select class="inline backend-select" data-id="${a.id}">
+        <select class="inline backend-select" data-id="${a.id}" ${dis}>
           <option value="auto">Tự động (Colab, dự phòng Local)</option>
           <option value="colab">Bắt buộc Colab</option>
           <option value="local">Bắt buộc Local</option>
         </select>
-        <button class="btn" data-action="train" ${status === 'training' ? 'disabled' : ''}>Huấn luyện</button>
+        <button class="btn" data-action="train" ${dis}>Huấn luyện</button>
       </div>
+      <div class="file-hint">Hoặc: tải lên 1 file .stt-pack.zip đã tải xuống trước đó, để train tiếp từ adapter cũ (không train lại từ đầu):</div>
       <div class="continue-row">
-        <input type="file" class="continue-pack" data-id="${a.id}" accept=".zip"/>
-        <button class="btn ghost" data-action="continue">Train tiếp từ pack cũ</button>
+        <input type="file" class="continue-pack" data-id="${a.id}" ${dis} accept=".zip"/>
+        <button class="btn ghost" data-action="continue" ${dis}>Train tiếp từ pack cũ</button>
       </div>
 
       <div class="actions-row">
@@ -255,6 +322,8 @@ function adapterCardHTML(a) {
   `;
 }
 
+let _wasTraining = false; // last poll's training state, so pollTrainingProgress knows when a run just finished
+
 async function loadAdapters() {
   try {
     const adapters = await api('/api/stt/adapters');
@@ -262,13 +331,50 @@ async function loadAdapters() {
     document.getElementById('adaptersList').innerHTML = adapters.map(adapterCardHTML).join('');
     adapters.forEach(a => {
       updateHwCount(a.id);
-      loadSamples(a.id);
+      loadSamples(a.id, a.status === 'training');
     });
 
-    const anyTraining = adapters.some(a => a.status === 'training');
+    _wasTraining = adapters.some(a => a.status === 'training');
+    renderTrainingProgress(adapters);
     clearTimeout(pollTimer);
-    if (anyTraining) pollTimer = setTimeout(loadAdapters, 4000);
+    if (_wasTraining) pollTimer = setTimeout(pollTrainingProgress, 3000);
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// Lightweight poll while training is in progress -- only updates the small
+// progress card (trainingProgressCard), never touches the adapters list DOM.
+// Full re-render (loadAdapters) used to run on every 4s tick while training,
+// which reset scroll position, any open sample-edit box, and every audio
+// player each time -- confirmed annoying in practice. This only falls back
+// to a full loadAdapters() once, right when a run actually finishes.
+async function pollTrainingProgress() {
+  try {
+    const adapters = await api('/api/stt/adapters');
+    const anyTraining = adapters.some(a => a.status === 'training');
+    renderTrainingProgress(adapters);
+    clearTimeout(pollTimer);
+    if (anyTraining) {
+      pollTimer = setTimeout(pollTrainingProgress, 3000);
+    } else if (_wasTraining) {
+      loadAdapters(); // just finished since the last tick -- pick up final status/pack
+    }
+    _wasTraining = anyTraining;
+  } catch (e) { /* transient poll failure -- next tick retries */ }
+}
+
+function renderTrainingProgress(adapters) {
+  const training = adapters.filter(a => a.status === 'training');
+  const card = document.getElementById('trainingProgressCard');
+  const list = document.getElementById('trainingProgressList');
+  if (!training.length) { card.hidden = true; return; }
+  card.hidden = false;
+  list.innerHTML = training.map(a => `
+    <div class="training-item">
+      <div class="name">${escapeHtml(a.name)}</div>
+      <div class="msg">${escapeHtml(a.progress_message || 'Đang xử lý…')}</div>
+      <div class="indeterminate-bar"></div>
+    </div>
+  `).join('');
 }
 
 function updateHwCount(id) {
@@ -280,32 +386,145 @@ function updateHwCount(id) {
   label.className = 'hw-count' + (n > MAX_HOTWORDS ? ' over' : '');
 }
 
-async function loadSamples(adapterId) {
+// Per-adapter client-side pagination/search state -- samples are fetched once
+// per loadSamples() call and sliced/filtered locally, so paging and typing in
+// the search box don't need their own network round-trip.
+const SAMPLES_PER_PAGE = 10;
+const _sampleState = {}; // adapterId -> { all: [], page: 1, query: '' }
+
+async function loadSamples(adapterId, locked) {
   try {
     const samples = await api(`/api/stt/adapters/${adapterId}/samples`);
-    const box = document.querySelector(`[data-samples-for="${adapterId}"]`);
     const countEl = document.querySelector(`[data-sample-count="${adapterId}"]`);
     if (countEl) countEl.textContent = samples.length;
-    if (!box) return;
-    box.innerHTML = samples.length
-      ? samples.map(s => `
-          <div class="sample-row" data-sample-id="${s.id}">
-            <span class="txt">${escapeHtml(s.reference_text)}</span>
-            <button data-action="delete-sample" data-adapter-id="${adapterId}" data-sample-id="${s.id}">Xoá</button>
-          </div>
-        `).join('')
-      : '<div class="empty">Chưa có mẫu nào.</div>';
+    const state = _sampleState[adapterId] || { page: 1, query: '' };
+    state.all = samples;
+    state.locked = !!locked;
+    _sampleState[adapterId] = state;
+    renderSamplesPage(adapterId);
   } catch (e) { /* card may have been removed by a concurrent delete */ }
+}
+
+function renderSamplesPage(adapterId) {
+  const state = _sampleState[adapterId];
+  const box = document.querySelector(`[data-samples-for="${adapterId}"]`);
+  if (!state || !box) return;
+
+  const q = state.query.trim().toLowerCase();
+  const filtered = q ? state.all.filter(s => s.reference_text.toLowerCase().includes(q)) : state.all;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / SAMPLES_PER_PAGE));
+  state.page = Math.min(Math.max(1, state.page), totalPages);
+  const start = (state.page - 1) * SAMPLES_PER_PAGE;
+  const pageItems = filtered.slice(start, start + SAMPLES_PER_PAGE);
+  const locked = state.locked;
+
+  const rowsHtml = pageItems.length
+    ? pageItems.map(s => `
+        <tr data-sample-id="${s.id}">
+          <td class="audio-cell">
+            <audio controls preload="none" src="/api/stt/adapters/${adapterId}/samples/${s.id}/audio"></audio>
+          </td>
+          <td class="transcript-cell">
+            <span class="txt-display">${escapeHtml(s.reference_text)}</span>
+            <textarea class="txt-edit" hidden>${escapeHtml(s.reference_text)}</textarea>
+          </td>
+          <td class="actions-cell">
+            ${locked ? '' : `
+            <span class="view-actions">
+              <button class="edit-sample" data-action="edit-sample" data-adapter-id="${adapterId}" data-sample-id="${s.id}">Sửa</button>
+              <button class="del-sample" data-action="delete-sample" data-adapter-id="${adapterId}" data-sample-id="${s.id}">Xoá</button>
+            </span>
+            <span class="edit-actions" hidden>
+              <button class="edit-sample" data-action="save-sample-edit" data-adapter-id="${adapterId}" data-sample-id="${s.id}">Lưu</button>
+              <button class="del-sample" data-action="cancel-sample-edit" data-adapter-id="${adapterId}" data-sample-id="${s.id}">Huỷ</button>
+            </span>`}
+          </td>
+        </tr>
+      `).join('')
+    : `<tr><td colspan="3" class="empty">${q ? 'Không tìm thấy mẫu nào khớp từ khoá.' : 'Chưa có mẫu nào.'}</td></tr>`;
+
+  box.innerHTML = `
+    <table class="samples-table">
+      <thead><tr><th>Âm thanh</th><th>Transcript</th><th></th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <div class="pager">
+      <button class="btn ghost" data-action="samples-prev" data-adapter-id="${adapterId}" ${state.page <= 1 ? 'disabled' : ''}>‹ Trước</button>
+      <span class="pager-info">Trang ${state.page}/${totalPages} — ${filtered.length} mẫu${q ? ` (lọc từ ${state.all.length})` : ''}</span>
+      <button class="btn ghost" data-action="samples-next" data-adapter-id="${adapterId}" ${state.page >= totalPages ? 'disabled' : ''}>Sau ›</button>
+    </div>
+  `;
+}
+
+async function saveSampleEdit(adapterId, sampleId) {
+  const row = document.querySelector(`tr[data-sample-id="${sampleId}"]`);
+  const text = row.querySelector('textarea.txt-edit').value.trim();
+  if (!text) { toast('Transcript không được để trống.', 'error'); return; }
+  try {
+    await api(`/api/stt/adapters/${adapterId}/samples/${sampleId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reference_text: text }),
+    });
+    const state = _sampleState[adapterId];
+    const s = state && state.all.find(x => x.id === sampleId);
+    if (s) s.reference_text = text;
+    toast('Đã lưu transcript.');
+    renderSamplesPage(adapterId);
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 document.getElementById('adaptersList').addEventListener('input', (e) => {
   if (e.target.matches('textarea.hotwords')) updateHwCount(Number(e.target.dataset.id));
+  if (e.target.matches('input.sample-search')) {
+    const id = Number(e.target.dataset.adapterId);
+    const state = _sampleState[id];
+    if (state) {
+      state.query = e.target.value;
+      state.page = 1;
+      renderSamplesPage(id);
+    }
+  }
 });
 
 document.getElementById('adaptersList').addEventListener('click', (e) => {
   const delBtn = e.target.closest('button[data-action="delete-sample"]');
   if (delBtn) {
     deleteSample(Number(delBtn.dataset.adapterId), Number(delBtn.dataset.sampleId));
+    return;
+  }
+  const editBtn = e.target.closest('button[data-action="edit-sample"]');
+  if (editBtn) {
+    const row = editBtn.closest('tr');
+    row.querySelector('.txt-display').hidden = true;
+    row.querySelector('.txt-edit').hidden = false;
+    row.querySelector('.view-actions').hidden = true;
+    row.querySelector('.edit-actions').hidden = false;
+    return;
+  }
+  const cancelBtn = e.target.closest('button[data-action="cancel-sample-edit"]');
+  if (cancelBtn) {
+    const row = cancelBtn.closest('tr');
+    row.querySelector('.txt-display').hidden = false;
+    row.querySelector('.txt-edit').hidden = true;
+    row.querySelector('.view-actions').hidden = false;
+    row.querySelector('.edit-actions').hidden = true;
+    return;
+  }
+  const saveBtn = e.target.closest('button[data-action="save-sample-edit"]');
+  if (saveBtn) {
+    saveSampleEdit(Number(saveBtn.dataset.adapterId), Number(saveBtn.dataset.sampleId));
+    return;
+  }
+  const prevBtn = e.target.closest('button[data-action="samples-prev"]');
+  if (prevBtn) {
+    const id = Number(prevBtn.dataset.adapterId);
+    if (_sampleState[id]) { _sampleState[id].page--; renderSamplesPage(id); }
+    return;
+  }
+  const nextBtn = e.target.closest('button[data-action="samples-next"]');
+  if (nextBtn) {
+    const id = Number(nextBtn.dataset.adapterId);
+    if (_sampleState[id]) { _sampleState[id].page++; renderSamplesPage(id); }
     return;
   }
   const btn = e.target.closest('button[data-action]');

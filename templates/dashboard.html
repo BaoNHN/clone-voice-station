@@ -13,11 +13,12 @@
   header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
   header h1 { font-size: 20px; margin: 0; }
   header .who { font-size: 15px; color: #9a9aa8; }
-  header .actions button {
+  header .actions button, header .actions a {
     background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #cfcfda;
     padding: 6px 12px; border-radius: 7px; font-size: 15px; cursor: pointer; margin-left: 8px;
+    text-decoration: none; display: inline-block;
   }
-  header .actions button:hover { border-color: #6c8cff; color: #fff; }
+  header .actions button:hover, header .actions a:hover { border-color: #6c8cff; color: #fff; }
 
   .card {
     background: #1f1f29; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
@@ -102,7 +103,7 @@
 
   .score-block { margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); }
   .score-badge {
-    display: inline-flex; align-items: baseline; gap: 8px; font-size: 26px; font-weight: 700;
+    display: inline-flex; align-items: baseline; gap: 8px; font-size: 25px; font-weight: 700;
   }
   .score-badge .verdict { font-size: 16px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
   .score-bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); margin: 10px 0 4px; overflow: hidden; }
@@ -137,6 +138,7 @@
     <div class="who">Đăng nhập với <strong>{{ manager }}</strong></div>
   </div>
   <div class="actions">
+    <a href="/stt-lab">STT Lab</a>
     <button onclick="openChangePassword()">Đổi mật khẩu</button>
     <button onclick="logout()">Đăng xuất</button>
   </div>
@@ -251,7 +253,7 @@
     <button class="btn ghost log-filter-btn" data-filter="voice" onclick="setLogFilter('voice')">🔊 Text-to-Speech / Giọng nói</button>
   </div>
   <pre id="serverLogBox" style="background:#14141b; border:1px solid rgba(255,255,255,0.12);
-       border-radius:8px; padding:12px; height:320px; overflow-y:auto; font-size:13px;
+       border-radius:8px; padding:12px; height:320px; overflow-y:auto; font-size:15px;
        line-height:1.5; white-space:pre-wrap; word-break:break-word; margin:0;
        font-family:'SF Mono', Consolas, monospace; color:#cfcfda;"></pre>
 </div>
