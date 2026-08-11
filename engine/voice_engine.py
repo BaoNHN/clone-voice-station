@@ -37,6 +37,16 @@ from engine.server_log import get_logger
 
 logger = get_logger()
 
+# Bundled static ffmpeg (see bin/, gitignored) — same requirement/workaround as
+# voice/stt.py: the conda-forge ffmpeg in rag_env fails to launch on this machine
+# (STATUS_ENTRYPOINT_NOT_FOUND), which made pydub silently skip writing the
+# AI-disclosure watermark tag in _add_ai_disclosure() below (pydub logs "Couldn't
+# find ffmpeg or avconv" and falls back to a no-op exporter that drops tags).
+# Falls back to PATH's ffmpeg if the bundled binary isn't present.
+_BUNDLED_FFMPEG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin")
+if os.path.isfile(os.path.join(_BUNDLED_FFMPEG_DIR, "ffmpeg.exe")):
+    os.environ["PATH"] = _BUNDLED_FFMPEG_DIR + os.pathsep + os.environ.get("PATH", "")
+
 POLL_INTERVAL_SEC = 15
 # Tolerance for transient network failures while polling (see rvc_client.train_status()'s
 # "network_error" status) before giving up on an otherwise-still-running job -- confirmed
@@ -81,7 +91,13 @@ async def _add_ai_disclosure(rvc_wav: bytes, base_voice: str) -> bytes:
     combined   = disclosure + AudioSegment.silent(duration=350) + content
 
     buf = io.BytesIO()
-    combined.export(buf, format="wav", tags={"comment": WATERMARK_TAG})
+    # codec must be passed explicitly -- pydub's export() silently takes an
+    # "easy_wav" shortcut (raw wave-module write, no ffmpeg invocation at all)
+    # whenever format="wav" and codec is None, which skips tags entirely
+    # regardless of tags= being set. pcm_s16le is WAV's own native encoding, so
+    # this changes nothing about the audio -- it only forces the ffmpeg path
+    # that actually writes the -metadata comment tag below.
+    combined.export(buf, format="wav", codec="pcm_s16le", tags={"comment": WATERMARK_TAG})
     return buf.getvalue()
 
 
@@ -205,6 +221,7 @@ def _download_and_store_model(speaker_id: str) -> str:
 def _poll_until_done(profile_id: int, speaker_id: str):
     waited = 0
     consecutive_network_errors = 0
+    last_logged_message = None
     while waited < MAX_TRAIN_WAIT_SEC:
         time.sleep(POLL_INTERVAL_SEC)
         waited += POLL_INTERVAL_SEC
@@ -245,6 +262,14 @@ def _poll_until_done(profile_id: int, speaker_id: str):
             update_voice_profile_status(
                 profile_id, "training", speaker_id=speaker_id, progress_message=status["message"]
             )
+            # Also mirror it into the system log (unlike STT-Lab training, which logs
+            # every step via engine/stt_train_engine.py, this path previously only ever
+            # reached the DB's progress_message column -- invisible on the dashboard's
+            # "Nhat ky he thong" panel). Gated on change since this loop polls every
+            # POLL_INTERVAL_SEC and Colab often repeats the same message across polls.
+            if status["message"] != last_logged_message:
+                logger.info(f"[Voice] Training {speaker_id}: {status['message']}")
+                last_logged_message = status["message"]
         if state == "unavailable":
             update_voice_profile_status(
                 profile_id, "failed", speaker_id=speaker_id,
