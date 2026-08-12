@@ -4,6 +4,11 @@ clone-voice-station là service độc lập (STT/TTS/RVC), được các app kh
 (rag-legal-assistant, voice-lab-example) gọi qua HTTP. Có thể chạy một
 mình để test, không bắt buộc phải có app gọi nó.
 
+Muốn dựng cả 4 project cùng lúc theo đúng thứ tự (kèm ngrok cho từng cái)?
+Xem HUONG_DAN_CHAY_TOAN_HE_THONG.md và HUONG_DAN_DEMO.html ngay trong
+thư mục này — đây là 2 tài liệu tổng hợp cho toàn hệ thống, không chỉ
+riêng service này.
+
 --------------------------------------------------------------------------
 1. CHẠY SERVICE CHÍNH
 --------------------------------------------------------------------------
