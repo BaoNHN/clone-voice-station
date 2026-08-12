@@ -104,16 +104,23 @@ EPOCHS_CPU          = 40     # CPU has no realistic path to 200 epochs -- bounde
 #   - EARLY_STOP_MIN_EPOCHS: no stopping before this many epochs -- the first several
 #     epochs are the noisiest (generator and discriminator are still finding balance),
 #     so convergence judgments there are unreliable.
-#   - EARLY_STOP_PATIENCE: 10, not 5 -- 5 was tried and rejected: with small personal
-#     voice-sample datasets (a handful of minutes of audio, few steps/epoch) the loss
-#     estimate per epoch is itself noisy, and 5 consecutive non-improving epochs is
-#     well within normal GAN oscillation, risking stopping right before a real
-#     improvement. 10 rides out more noise at the cost of a bit more compute.
+#   - EARLY_STOP_PATIENCE: 5, not 10 (revised 2026-08-12) -- patience only counts
+#     genuinely fresh loss readings (see the metric_is_fresh fix below), and in
+#     practice a fresh reading only lands roughly every ~25 epochs, not every epoch.
+#     At 10, patience could need up to ~250 epochs' worth of fresh-reading gaps to
+#     exhaust -- past the 200-epoch cap entirely, i.e. early stopping effectively
+#     never fired (confirmed for real: a run sat at loss 35.340 from epoch 51 through
+#     at least epoch 72 with no sign of stopping). 5 was tried and rejected once before
+#     under the *old* per-epoch counting (see git history), but that risk doesn't apply
+#     here: MIN_EPOCHS=15 already skips the noisiest epochs, and each of the 5 patience
+#     "strikes" is itself a real fresh comparison ~25 epochs apart, not 5 consecutive
+#     noisy single epochs -- so 5 fresh non-improving readings is still riding out real
+#     oscillation, just within a cap the run can actually reach.
 #   - EARLY_STOP_MIN_DELTA: minimum loss decrease to count as "improvement" -- without
 #     this, floating-point-noise-sized "improvements" would keep resetting the patience
 #     counter forever.
 EARLY_STOP_MIN_EPOCHS = 15
-EARLY_STOP_PATIENCE    = 10
+EARLY_STOP_PATIENCE    = 5
 EARLY_STOP_MIN_DELTA   = 0.01
 
 # If train.train produces *no output at all* (not even a single log line) for this
@@ -613,6 +620,7 @@ def _run_training_with_early_stop(venv_python: str, exp_dir: str, speaker_id: st
 
     epoch           = 0
     last_metric     = None
+    last_epoch      = 0       # epoch of the most recent fresh reading, improved or not
     metric_is_fresh = False  # a NEW loss line arrived since the last epoch boundary
     best_metric     = None
     best_epoch      = 0
@@ -654,17 +662,34 @@ def _run_training_with_early_stop(venv_python: str, exp_dir: str, speaker_id: st
             # after the *same* stale loss value got re-evaluated 11 times in a row.
             # Only counting epochs with a genuinely fresh reading fixes that.
             if metric_is_fresh:
-                if best_metric is None or last_metric < best_metric - EARLY_STOP_MIN_DELTA:
-                    best_metric, best_epoch, no_improve = last_metric, epoch, 0
+                last_epoch = epoch
+                if epoch < EARLY_STOP_MIN_EPOCHS:
+                    # Readings before MIN_EPOCHS don't touch best_metric/no_improve at all --
+                    # not just "can't trigger a stop yet" but "never counted as a strike" --
+                    # so a few noisy non-improving early readings can't pre-load patience and
+                    # cause an immediate stop the instant epoch crosses MIN_EPOCHS with no real
+                    # post-MIN_EPOCHS evaluation. The first eligible reading (epoch >=
+                    # MIN_EPOCHS) becomes the baseline "best" fresh, same as if training started
+                    # there.
+                    report(f"Epoch {epoch}/{epochs} — loss {last_metric:.3f} "
+                           f"(before epoch {EARLY_STOP_MIN_EPOCHS} -- not yet counted toward early stop)")
                 else:
-                    no_improve += 1
-                report(f"Epoch {epoch}/{epochs} — loss {last_metric:.3f} "
-                       f"(best {best_metric:.3f} @ epoch {best_epoch}, "
-                       f"{no_improve}/{EARLY_STOP_PATIENCE} without improvement)")
+                    if best_metric is None or last_metric < best_metric - EARLY_STOP_MIN_DELTA:
+                        best_metric, best_epoch, no_improve = last_metric, epoch, 0
+                    else:
+                        no_improve += 1
+                    report(f"Epoch {epoch}/{epochs} — loss {last_metric:.3f} "
+                           f"(best {best_metric:.3f} @ epoch {best_epoch}, "
+                           f"{no_improve}/{EARLY_STOP_PATIENCE} without improvement)")
                 metric_is_fresh = False
             elif last_metric is not None:
+                # last_epoch (not best_epoch) here -- last_metric is the most recent fresh
+                # reading, which isn't the best one once a non-improving reading comes in
+                # (e.g. a 39.174 reading at epoch 76 after a 35.340 best @ epoch 51 previously
+                # showed the misleading "last: 39.174 @ epoch 51", pairing a later value with
+                # an earlier, unrelated epoch number).
                 report(f"Epoch {epoch}/{epochs} — no new loss reading yet "
-                       f"(last: {last_metric:.3f} @ epoch {best_epoch})")
+                       f"(last: {last_metric:.3f} @ epoch {last_epoch})")
 
             if epoch >= EARLY_STOP_MIN_EPOCHS and no_improve >= EARLY_STOP_PATIENCE:
                 report(f"No improvement for {EARLY_STOP_PATIENCE} epochs -- stopping early "

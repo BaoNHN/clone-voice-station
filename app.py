@@ -33,7 +33,7 @@ from database.database import (
     verify_manager_login, change_manager_password,
     create_notification, mark_notification_delivered, list_undelivered_notifications,
     VOICE_SAMPLES_DIR, MIN_TRAIN_SAMPLES, MAX_CLONED_VOICES_PER_USER,
-    create_stt_guest, verify_stt_guest_login,
+    create_stt_guest, verify_stt_guest_login, get_stt_guest,
     list_stt_adapters, get_stt_adapter, create_stt_adapter,
     rename_stt_adapter, update_stt_adapter_hotwords, delete_stt_adapter,
     delete_stt_guest_account,
@@ -46,6 +46,7 @@ from database.database import (
     delete_stt_training_sample, set_stt_adapter_resume_path,
     list_all_stt_adapters_global, publish_stt_adapter, unpublish_stt_adapter,
     get_published_stt_adapter_for_client,
+    set_default_stt_adapter, unset_default_stt_adapter, get_default_stt_adapter,
 )
 from voice import rvc_client, stt, stt_adapter_infer
 from voice.scripts import get_scripts
@@ -239,6 +240,16 @@ async def login_submit(request: Request, username: str = Form(...), password: st
         )
 
     _failed_logins.pop(f"manager:{ip}", None)
+    # Clear any leftover STT Lab guest identity from this same browser session (added
+    # 2026-08-12) -- manager and guest identity live in the same session cookie, so
+    # without this, a manager who'd separately logged into /stt-lab as some guest
+    # earlier in this browser would still resolve as that guest on /stt-lab after
+    # also logging in here, i.e. the manager dashboard "leaking into" a specific
+    # guest's own page. Manager oversight of guest adapters already has its own path
+    # (/manager/stt, require_manager) that doesn't need this coexistence.
+    request.session.pop("stt_guest_id", None)
+    request.session.pop("stt_guest_username", None)
+    request.session.pop("stt_csrf_token", None)
     request.session["manager"] = username
     request.session["csrf_token"] = secrets.token_urlsafe(32)
     return RedirectResponse("/", status_code=302)
@@ -317,6 +328,10 @@ async def stt_register_submit(request: Request, username: str = Form(...), passw
             {"error": "Tên đăng nhập đã được sử dụng."}, status_code=409,
         )
 
+    # Symmetric with login_submit's clear above -- a manager identity left over in
+    # this same browser session must not coexist with a freshly registered guest.
+    request.session.pop("manager", None)
+    request.session.pop("csrf_token", None)
     request.session["stt_guest_id"] = guest_id
     request.session["stt_guest_username"] = username
     request.session["stt_csrf_token"] = secrets.token_urlsafe(32)
@@ -348,6 +363,9 @@ async def stt_login_submit(request: Request, username: str = Form(...), password
         )
 
     _failed_logins.pop(f"stt:{ip}", None)
+    # Same clear as registration above -- see login_submit's comment for why.
+    request.session.pop("manager", None)
+    request.session.pop("csrf_token", None)
     request.session["stt_guest_id"] = guest["id"]
     request.session["stt_guest_username"] = guest["username"]
     request.session["stt_csrf_token"] = secrets.token_urlsafe(32)
@@ -773,12 +791,14 @@ async def transcribe_route(
 
     If a manager has published a Tier 2 STT adapter for this client (see
     /manager/stt/adapters/{id}/publish), tries that fine-tuned model first.
-    Otherwise -- or if the adapter fails to load/run -- tries the Colab-hosted
-    PhoWhisper endpoint (Vietnamese-tuned, see voice/rvc_client.py's
-    transcribe_remote() and colab/voice_server.ipynb) and falls back to the
-    local, CPU-only openai-whisper model (voice/stt.py) whenever Colab is
-    unset/unreachable — same degrade-gracefully contract as /api/speak's RVC
-    conversion."""
+    Otherwise, tries the manager's system-wide default adapter if one is set
+    (see /manager/stt/adapters/{id}/set-default) -- a manager-owned adapter
+    that isn't tied to any single client_id. Otherwise -- or if either adapter
+    fails to load/run -- tries the Colab-hosted PhoWhisper endpoint
+    (Vietnamese-tuned, see voice/rvc_client.py's transcribe_remote() and
+    colab/voice_server.ipynb) and falls back to the local, CPU-only
+    openai-whisper model (voice/stt.py) whenever Colab is unset/unreachable —
+    same degrade-gracefully contract as /api/speak's RVC conversion."""
     audio_bytes = await audio.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Không có dữ liệu âm thanh.")
@@ -786,14 +806,14 @@ async def transcribe_route(
     mime = audio.content_type or mimetypes.guess_type(audio.filename or "")[0] or "audio/webm"
 
     result = None
-    published_adapter = get_published_stt_adapter_for_client(client["id"])
-    if published_adapter:
+    adapter = get_published_stt_adapter_for_client(client["id"]) or get_default_stt_adapter()
+    if adapter:
         try:
             result = await asyncio.to_thread(
-                stt_adapter_infer.transcribe, published_adapter, audio_bytes, mime, language or None
+                stt_adapter_infer.transcribe, adapter, audio_bytes, mime, language or None
             )
         except Exception as e:
-            logger.warning(f"[STT-adapter] Adapter #{published_adapter['id']} lỗi, dùng model gốc thay thế: {e}")
+            logger.warning(f"[STT-adapter] Adapter #{adapter['id']} lỗi, dùng model gốc thay thế: {e}")
 
     if result is None:
         result = await asyncio.to_thread(rvc_client.transcribe_remote, audio_bytes, mime, language or None)
@@ -1167,6 +1187,33 @@ async def download_stt_adapter_route(adapter_id: int, guest_id: int = Depends(re
     )
 
 
+@app.post("/api/stt/adapters/{adapter_id}/publish")
+async def publish_stt_adapter_route(adapter_id: int, guest_id: int = Depends(require_stt_guest)):
+    """Self-serve publish (added 2026-08-12): a guest activates their own ready adapter
+    for their own auto-provisioned client's /api/transcribe traffic immediately, no
+    manager step in between -- see _provision_stt_guest_client (database.py). Unlike
+    the manager route (POST /manager/stt/adapters/{id}/publish), client_id is never
+    taken from the request -- it's always the guest's own, read fresh from the DB
+    (not the session) so a manager fix-up is honored right away."""
+    adapter = _get_owned_stt_adapter(adapter_id, guest_id)
+    if adapter["status"] != "ready" or not adapter["adapter_path"]:
+        raise HTTPException(status_code=400,
+            detail="Chỉ có thể publish adapter đã huấn luyện xong (status='ready').")
+    guest = get_stt_guest(guest_id)
+    if not guest or not guest["client_id"]:
+        raise HTTPException(status_code=400,
+            detail="Tài khoản của bạn chưa có client — vui lòng thử lại hoặc liên hệ quản trị viên.")
+    publish_stt_adapter(adapter_id, guest["client_id"])
+    return {"status": "ok"}
+
+
+@app.post("/api/stt/adapters/{adapter_id}/unpublish")
+async def unpublish_stt_adapter_route(adapter_id: int, guest_id: int = Depends(require_stt_guest)):
+    _get_owned_stt_adapter(adapter_id, guest_id)
+    unpublish_stt_adapter(adapter_id)
+    return {"status": "ok"}
+
+
 def _delete_stt_adapter_files(adapter: dict):
     """Removes this adapter's training-sample audio files and trained-model
     directory from disk — the DB-layer delete_stt_adapter()/
@@ -1441,6 +1488,27 @@ async def manager_publish_stt_adapter_route(adapter_id: int, request: Request, m
 async def manager_unpublish_stt_adapter_route(adapter_id: int, manager: str = Depends(require_manager)):
     _get_stt_adapter_or_404(adapter_id)
     unpublish_stt_adapter(adapter_id)
+    return {"status": "ok"}
+
+
+@app.post("/manager/stt/adapters/{adapter_id}/set-default")
+async def manager_set_default_stt_adapter_route(adapter_id: int, manager: str = Depends(require_manager)):
+    """Sets adapter_id as the system-wide fallback for any client with nothing of
+    its own published -- unlike /publish, this takes no client_id at all."""
+    adapter = _get_stt_adapter_or_404(adapter_id)
+    if adapter["status"] != "ready" or not adapter["adapter_path"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Chỉ có thể đặt mặc định cho adapter đã huấn luyện xong (status='ready', có adapter_path).",
+        )
+    set_default_stt_adapter(adapter_id)
+    return {"status": "ok"}
+
+
+@app.post("/manager/stt/adapters/{adapter_id}/unset-default")
+async def manager_unset_default_stt_adapter_route(adapter_id: int, manager: str = Depends(require_manager)):
+    _get_stt_adapter_or_404(adapter_id)
+    unset_default_stt_adapter(adapter_id)
     return {"status": "ok"}
 
 

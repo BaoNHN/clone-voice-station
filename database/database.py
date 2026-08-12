@@ -63,8 +63,10 @@ MAX_STT_ADAPTERS_PER_GUEST = 3
 ALLOWED_STT_BASE_MODELS = ("whisper-tiny", "whisper-base")
 
 # First client seeded on a fresh DB — matches the app this service was extracted from
-# (rag-legal-assistant), display-renamed to a clearer demo-facing label.
-DEFAULT_CLIENT_NAME = "Voice Rag example"
+# (D:\hoc\project\rag-legal-assistant). Named to match the lowercase-hyphen convention
+# used by the other real client, "voice-lab-example" -- renamed 2026-08-12 from the
+# earlier display-style "Voice Rag example" (see the rename migration in init_db()).
+DEFAULT_CLIENT_NAME = "voice-rag-example"
 
 # Default account for the manager dashboard, seeded on first init only.
 DEFAULT_MANAGER_USERNAME = "manager"
@@ -224,6 +226,15 @@ def init_db():
             created_at    REAL
         )
     """)
+    # Self-publish (added 2026-08-12): each guest gets their own dedicated `clients`
+    # row, auto-provisioned at registration (see _provision_stt_guest_client /
+    # create_stt_guest below) -- so a guest can publish an adapter live for their own
+    # traffic without a manager assigning a client first, while never being able to
+    # target a real production client (e.g. DEFAULT_CLIENT_NAME) themselves.
+    try:
+        c.execute("ALTER TABLE stt_guests ADD COLUMN client_id INTEGER")
+    except Exception:
+        pass
 
     # Tier 1 (hotword/prompt-bias) adapters. status/error_message/progress_message/
     # adapter_path are intentionally absent — Tier 1 creation is synchronous with
@@ -259,6 +270,12 @@ def init_db():
         # DB constraint, same pattern as voice_profiles.is_default).
         "ALTER TABLE stt_adapters ADD COLUMN client_id INTEGER",
         "ALTER TABLE stt_adapters ADD COLUMN is_published INTEGER DEFAULT 0",
+        # Global default adapter (added 2026-08-12): a manager can designate one
+        # ready adapter as the system-wide fallback for ANY client that has no
+        # adapter of its own published -- independent of client_id/is_published,
+        # which only ever target one specific client. See set_default_stt_adapter()/
+        # get_default_stt_adapter() below and /api/transcribe's fallback chain.
+        "ALTER TABLE stt_adapters ADD COLUMN is_default INTEGER DEFAULT 0",
     ):
         try:
             c.execute(stmt)
@@ -303,6 +320,16 @@ def init_db():
         )
     conn.commit()
 
+    # One-time rename (added 2026-08-12): the default client was originally seeded as
+    # "Voice Rag example" (display-style); renamed to match the lowercase-hyphen
+    # convention DEFAULT_CLIENT_NAME now uses. Renaming in place (not delete+reseed)
+    # keeps the same id/api_key, so rag-legal-assistant's already-configured key keeps
+    # working. No-op once the row is already named DEFAULT_CLIENT_NAME.
+    c.execute("UPDATE clients SET name=? WHERE name=?", (DEFAULT_CLIENT_NAME, "Voice Rag example"))
+    if c.rowcount:
+        conn.commit()
+        print(f"[clone-voice-station] Renamed default client 'Voice Rag example' -> '{DEFAULT_CLIENT_NAME}'")
+
     # Seed the default client this service was split out of, on first run only.
     c.execute("SELECT id, api_key FROM clients WHERE name=?", (DEFAULT_CLIENT_NAME,))
     row = c.fetchone()
@@ -329,6 +356,58 @@ def init_db():
         conn.commit()
         print(f"[clone-voice-station] Seeded manager account — username: {DEFAULT_MANAGER_USERNAME}  password: {password}")
         print(f"[clone-voice-station] Log in at http://127.0.0.1:8090/login and change this password.")
+
+    # Backfill client_id for STT Lab guests registered before self-publish existed --
+    # auto-provisions a dedicated client per guest, same as new registrations get via
+    # create_stt_guest(), so every guest can self-publish without waiting on a manager.
+    orphan_guests = c.execute("SELECT id, username FROM stt_guests WHERE client_id IS NULL").fetchall()
+    for guest_id, username in orphan_guests:
+        try:
+            client_id = _provision_stt_guest_client(username)
+            c.execute("UPDATE stt_guests SET client_id=? WHERE id=?", (client_id, guest_id))
+            conn.commit()
+            print(f"[clone-voice-station] Backfilled client_id for STT guest '{username}' (id={guest_id})")
+        except Exception as e:
+            print(f"[clone-voice-station] Failed to backfill client for STT guest '{username}' (id={guest_id}): {e}")
+
+    # Recover training rows orphaned by a server crash/restart (added 2026-08-12).
+    # Both RVC voice cloning (voice/rvc_local.py) and STT Tier 2 fine-tuning run their
+    # training loop on a background thread inside *this* process -- there is no
+    # separate worker and no resume-on-startup, so if the process dies mid-training
+    # (crash, power loss, manual restart) the row is left at status='training' forever
+    # with nothing left actually training it. The dashboards disable "Huấn luyện lại"/
+    # retrain while status='training' (see dashboard.html's canRetrain, manager_stt.html/
+    # stt_guest_dashboard.html's `locked`), so an orphaned row was previously stuck with
+    # no way to retrain short of editing the DB by hand. Flipping orphans to 'error' here
+    # on every startup unlocks that button again; progress_message is left untouched so
+    # the last real progress (e.g. "Epoch 169/200 ...") stays visible for diagnosis.
+    # Names are user-entered (often Vietnamese) and Windows' default console/file
+    # codepage can't encode them -- print() with a raw name here has actually crashed
+    # this startup path before (UnicodeEncodeError on cp1252), which would turn "one
+    # orphaned row" into "server won't start at all". Keep these print()s ASCII-only.
+    orphaned_profiles = c.execute(
+        "SELECT id FROM voice_profiles WHERE status='training'"
+    ).fetchall()
+    for (pid,) in orphaned_profiles:
+        c.execute(
+            "UPDATE voice_profiles SET status='error', error_message=? WHERE id=?",
+            ("Huấn luyện bị gián đoạn (máy chủ khởi động lại giữa chừng) — bấm \"Huấn luyện lại\" để tiếp tục.", pid)
+        )
+        print(f"[clone-voice-station] Recovered orphaned training for voice profile id={pid} -> error, retrain unlocked")
+    if orphaned_profiles:
+        conn.commit()
+
+    orphaned_adapters = c.execute(
+        "SELECT id FROM stt_adapters WHERE status='training'"
+    ).fetchall()
+    for (aid,) in orphaned_adapters:
+        c.execute(
+            "UPDATE stt_adapters SET status='error', error_message=? WHERE id=?",
+            ("Huấn luyện bị gián đoạn (máy chủ khởi động lại giữa chừng) — bấm \"Huấn luyện lại\" để tiếp tục.", aid)
+        )
+        print(f"[clone-voice-station] Recovered orphaned training for STT adapter id={aid} -> error, retrain unlocked")
+    if orphaned_adapters:
+        conn.commit()
 
     conn.close()
 
@@ -431,6 +510,22 @@ def change_manager_password(username: str, new_password: str):
 # =========================
 # STT LAB (guest self-serve hotword/prompt-bias adapters — Tier 1)
 # =========================
+def _provision_stt_guest_client(username: str) -> int:
+    """Auto-provisions a dedicated `clients` row for an STT Lab guest so they can
+    self-publish adapters (see publish_stt_adapter_route in app.py) without a manager
+    assigning one -- isolated per guest, never a real production client like
+    DEFAULT_CLIENT_NAME. `username` is UNIQUE on stt_guests, so this name only ever
+    collides with create_client()'s uniqueness check if a client with that exact name
+    was created some other way; fall back to a suffixed name in that rare case rather
+    than fail registration outright."""
+    name = f"stt-guest-{username}"
+    try:
+        client = create_client(name)
+    except ValueError:
+        client = create_client(f"{name}-{secrets.token_hex(4)}")
+    return client["id"]
+
+
 def create_stt_guest(username: str, password: str) -> int:
     """Raises sqlite3.IntegrityError if username is already taken — the
     caller (app.py) turns that into a 409.
@@ -452,9 +547,33 @@ def create_stt_guest(username: str, password: str) -> int:
         )
         guest_id = c.lastrowid
         conn.commit()
-        return guest_id
     finally:
         conn.close()
+
+    # Provisioned as a separate step/connection (not inside the transaction above) --
+    # if this fails, the guest account still exists and init_db()'s startup backfill
+    # will retry it, rather than failing registration outright over a client-side add.
+    try:
+        client_id = _provision_stt_guest_client(username)
+        conn = get_conn()
+        conn.execute("UPDATE stt_guests SET client_id=? WHERE id=?", (client_id, guest_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[clone-voice-station] Failed to provision client for new STT guest '{username}': {e}")
+
+    return guest_id
+
+
+def get_stt_guest(guest_id: int):
+    conn = get_conn()
+    row  = conn.execute(
+        "SELECT id, username, client_id FROM stt_guests WHERE id=?", (guest_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row[0], "username": row[1], "client_id": row[2]}
 
 
 def verify_stt_guest_login(username: str, password: str):
@@ -471,7 +590,7 @@ def verify_stt_guest_login(username: str, password: str):
 _STT_ADAPTER_COLUMNS = (
     "id, guest_id, name, base_model, hotwords_json, created_at, "
     "status, error_message, progress_message, adapter_path, resume_from_path, backend_used, "
-    "client_id, is_published"
+    "client_id, is_published, is_default"
 )
 
 
@@ -481,7 +600,7 @@ def _stt_adapter_row_to_dict(row) -> dict:
         "hotwords": json.loads(row[4] or "[]"), "created_at": row[5],
         "status": row[6], "error_message": row[7], "progress_message": row[8],
         "adapter_path": row[9], "resume_from_path": row[10], "backend_used": row[11],
-        "client_id": row[12], "is_published": bool(row[13]),
+        "client_id": row[12], "is_published": bool(row[13]), "is_default": bool(row[14]),
     }
 
 
@@ -545,9 +664,9 @@ def list_all_stt_adapters_global() -> list:
     conn.close()
     result = []
     for r in rows:
-        d = _stt_adapter_row_to_dict(r[:14])
-        d["guest_username"] = r[14]
-        d["client_name"] = r[15]
+        d = _stt_adapter_row_to_dict(r[:15])
+        d["guest_username"] = r[15]
+        d["client_name"] = r[16]
         result.append(d)
     return result
 
@@ -569,6 +688,38 @@ def unpublish_stt_adapter(adapter_id: int):
     conn.execute("UPDATE stt_adapters SET is_published=0 WHERE id=?", (adapter_id,))
     conn.commit()
     conn.close()
+
+
+def set_default_stt_adapter(adapter_id: int):
+    """Designates adapter_id as the system-wide fallback STT model used by any
+    client with no adapter of its own published (see get_default_stt_adapter()
+    and /api/transcribe's fallback chain) -- independent of client_id/
+    is_published, which only ever target one specific client. At most one
+    default at a time, same single-row invariant as is_published-per-client."""
+    conn = get_conn()
+    conn.execute("UPDATE stt_adapters SET is_default=0 WHERE is_default=1")
+    conn.execute("UPDATE stt_adapters SET is_default=1 WHERE id=?", (adapter_id,))
+    conn.commit()
+    conn.close()
+
+
+def unset_default_stt_adapter(adapter_id: int):
+    conn = get_conn()
+    conn.execute("UPDATE stt_adapters SET is_default=0 WHERE id=?", (adapter_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_default_stt_adapter():
+    """Only ever returns a default that's both flagged AND actually ready to run
+    -- same staleness guard as get_published_stt_adapter_for_client()."""
+    conn = get_conn()
+    row = conn.execute(
+        f"SELECT {_STT_ADAPTER_COLUMNS} FROM stt_adapters "
+        f"WHERE is_default=1 AND status='ready' AND adapter_path IS NOT NULL LIMIT 1"
+    ).fetchone()
+    conn.close()
+    return _stt_adapter_row_to_dict(row) if row else None
 
 
 def get_published_stt_adapter_for_client(client_id: int):

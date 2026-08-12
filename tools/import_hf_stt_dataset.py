@@ -69,10 +69,12 @@ POLL_INTERVAL_SEC = 10
 HF_PAGE_SIZE = 100  # datasets-server's rows endpoint hard-caps "length" at 100 per call
 
 
-def fetch_rows(dataset: str, split: str, offset: int, length: int) -> list:
+def fetch_rows(dataset: str, split: str, offset: int, length: int, text_field: str = "text") -> list:
     """Returns a list of {"audio_url": str, "text": str} from datasets-server's row preview API
     -- no download of the underlying parquet file needed, just this JSON endpoint. Paginates
-    internally in HF_PAGE_SIZE chunks since the endpoint rejects length > 100 outright."""
+    internally in HF_PAGE_SIZE chunks since the endpoint rejects length > 100 outright.
+    text_field lets a dataset that names its transcript column something other than "text"
+    (e.g. doof-ferb/vlsp2020_vinai_100h uses "transcription") be read without renaming columns."""
     rows = []
     remaining = length
     while remaining > 0:
@@ -89,7 +91,7 @@ def fetch_rows(dataset: str, split: str, offset: int, length: int) -> list:
         for entry in page_rows:
             row = entry["row"]
             audio = row.get("audio")
-            text = (row.get("text") or "").strip()
+            text = (row.get(text_field) or "").strip()
             if not audio or not text:
                 continue
             rows.append({"audio_url": audio[0]["src"], "text": text})
@@ -177,11 +179,73 @@ class StationSession:
         return resp.content
 
 
-def import_training_samples(station: StationSession, adapter_id: int, dataset: str, limit: int):
+class ManagerSession:
+    """Same method shapes as StationSession (create_adapter/upload_sample/start_training/
+    get_adapter/download_pack are duck-typed, used interchangeably by import_training_samples/
+    export_eval_set/wait_for_training below), but authenticates as a manager via the existing
+    dashboard login (POST /login, not /stt-lab/register) and hits /manager/stt/adapters* instead
+    of /api/stt/adapters* -- so the resulting adapter is manager-owned (guest_id=NULL), matching
+    app.py's /manager/stt/adapters routes (require_manager-gated, no per-guest adapter cap)."""
+
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+        self.session = requests.Session()
+        self.csrf_token = None
+
+    def login(self, username: str, password: str):
+        resp = self.session.post(f"{self.base_url}/login",
+                                  data={"username": username, "password": password}, timeout=15)
+        resp.raise_for_status()
+        page = self.session.get(f"{self.base_url}/manager/stt", timeout=15)
+        page.raise_for_status()
+        m = CSRF_TOKEN_RE.search(page.text)
+        if not m:
+            raise RuntimeError("Could not find CSRF_TOKEN in /manager/stt page -- manager login likely failed "
+                                "(check --manager-username/--manager-password or MANAGER_USERNAME/MANAGER_PASSWORD).")
+        self.csrf_token = m.group(1)
+
+    def _headers(self) -> dict:
+        return {"X-CSRF-Token": self.csrf_token}
+
+    def create_adapter(self, name: str, base_model: str) -> int:
+        resp = self.session.post(f"{self.base_url}/manager/stt/adapters",
+                                  json={"name": name, "base_model": base_model},
+                                  headers=self._headers(), timeout=15)
+        resp.raise_for_status()
+        return resp.json()["adapter_id"]
+
+    def upload_sample(self, adapter_id: int, audio_bytes: bytes, reference_text: str, is_holdout: bool = False):
+        resp = self.session.post(
+            f"{self.base_url}/manager/stt/adapters/{adapter_id}/samples",
+            files={"audio": ("sample.wav", audio_bytes, "audio/wav")},
+            data={"reference_text": reference_text, "is_holdout": str(is_holdout).lower()},
+            headers=self._headers(), timeout=30,
+        )
+        resp.raise_for_status()
+
+    def start_training(self, adapter_id: int, backend: str = "local"):
+        resp = self.session.post(f"{self.base_url}/manager/stt/adapters/{adapter_id}/train",
+                                  json={"backend": backend}, headers=self._headers(), timeout=15)
+        resp.raise_for_status()
+
+    def get_adapter(self, adapter_id: int) -> dict:
+        resp = self.session.get(f"{self.base_url}/manager/stt/adapters/{adapter_id}",
+                                 headers=self._headers(), timeout=60)
+        resp.raise_for_status()
+        return resp.json()
+
+    def download_pack(self, adapter_id: int) -> bytes:
+        resp = self.session.get(f"{self.base_url}/manager/stt/adapters/{adapter_id}/download",
+                                 headers=self._headers(), timeout=30)
+        resp.raise_for_status()
+        return resp.content
+
+
+def import_training_samples(station: StationSession, adapter_id: int, dataset: str, limit: int, text_field: str = "text"):
     print(f"Fetching up to {limit} training rows from {dataset} (split=train)...")
     # Over-fetch a bit: some rows get skipped for exceeding MAX_STT_SAMPLE_DURATION_SEC
     # (this dataset's clips run right up to that 30s cap) or a failed download.
-    rows = fetch_rows(dataset, "train", offset=0, length=int(limit * 1.3) + 5)
+    rows = fetch_rows(dataset, "train", offset=0, length=int(limit * 1.3) + 5, text_field=text_field)
     uploaded = 0
     for row in rows:
         if uploaded >= limit or uploaded >= MAX_STT_TRAIN_SAMPLES:
@@ -206,7 +270,8 @@ def import_training_samples(station: StationSession, adapter_id: int, dataset: s
     return uploaded
 
 
-def export_eval_set(dataset: str, limit: int, eval_dir: str, station: "StationSession" = None, adapter_id: int = None):
+def export_eval_set(dataset: str, limit: int, eval_dir: str, station: "StationSession" = None, adapter_id: int = None,
+                     text_field: str = "text"):
     """Writes the dataset's official "test" split to eval_dir (for
     voice-lab-example/tools/test_medical_lora_wer.py's standalone comparison), and --
     when station/adapter_id are given -- ALSO uploads the same rows to the adapter as
@@ -215,7 +280,7 @@ def export_eval_set(dataset: str, limit: int, eval_dir: str, station: "StationSe
     module's docstring). Same rows either way -- one export, two destinations."""
     print(f"Fetching up to {limit} held-out rows from {dataset} (split=test)...")
     os.makedirs(eval_dir, exist_ok=True)
-    rows = fetch_rows(dataset, "test", offset=0, length=int(limit * 1.3) + 5)
+    rows = fetch_rows(dataset, "test", offset=0, length=int(limit * 1.3) + 5, text_field=text_field)
     saved = 0
     for row in rows:
         if saved >= limit:
@@ -283,25 +348,57 @@ def main():
     ap.add_argument("--backend", default="local", choices=("auto", "colab", "local"),
                      help="Training backend, same choices as the STT Lab page itself (default: local)")
     ap.add_argument("--download-pack", default=None, help="Path to save the .stt-pack.zip once ready")
+    ap.add_argument("--text-field", default="text",
+                     help="Dataset column holding the transcript (default: 'text'; e.g. "
+                          "doof-ferb/vlsp2020_vinai_100h uses 'transcription')")
+    ap.add_argument("--no-eval-split", action="store_true",
+                     help="Skip exporting/uploading a held-out test split -- use for datasets with no "
+                          "separate test split (e.g. doof-ferb/vlsp2020_vinai_100h has only 'train'); "
+                          "voice/stt_local_train.py will then carve its own internal train/val/test split "
+                          "from the uploaded training samples instead")
+    ap.add_argument("--as-manager", action="store_true",
+                     help="Create a manager-owned adapter (guest_id=NULL) via /manager/stt/adapters* "
+                          "instead of a self-serve guest adapter -- uses manager dashboard login, not "
+                          "STT Lab guest register/login")
+    ap.add_argument("--manager-username", default=os.getenv("MANAGER_USERNAME"),
+                     help="Manager dashboard username (--as-manager only; default: $MANAGER_USERNAME)")
+    ap.add_argument("--manager-password", default=os.getenv("MANAGER_PASSWORD"),
+                     help="Manager dashboard password (--as-manager only; default: $MANAGER_PASSWORD)")
     args = ap.parse_args()
 
-    station = StationSession(args.base_url)
+    if args.as_manager:
+        station = ManagerSession(args.base_url)
+    else:
+        station = StationSession(args.base_url)
     try:
         station.session.get(f"{args.base_url}/api/health", timeout=5).raise_for_status()
     except requests.exceptions.RequestException as e:
         print(f"clone-voice-station not reachable at {args.base_url}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Registering guest '{args.username}' on {args.base_url}...")
-    station.register_or_login(args.username, args.password)
-    print(f"  (credentials -- username: {args.username}  password: {args.password} -- "
-          f"save these to log back in and inspect the adapter at /stt-lab)")
+    if args.as_manager:
+        if not args.manager_username or not args.manager_password:
+            print("--as-manager requires --manager-username/--manager-password "
+                  "(or MANAGER_USERNAME/MANAGER_PASSWORD env vars).", file=sys.stderr)
+            sys.exit(1)
+        print(f"Logging in as manager '{args.manager_username}' on {args.base_url}...")
+        station.login(args.manager_username, args.manager_password)
+    else:
+        print(f"Registering guest '{args.username}' on {args.base_url}...")
+        station.register_or_login(args.username, args.password)
+        print(f"  (credentials -- username: {args.username}  password: {args.password} -- "
+              f"save these to log back in and inspect the adapter at /stt-lab)")
 
     adapter_id = station.create_adapter(args.adapter_name, args.base_model)
     print(f"Created adapter #{adapter_id} ({args.base_model}).")
 
-    import_training_samples(station, adapter_id, args.dataset, args.train_limit)
-    export_eval_set(args.dataset, args.eval_limit, args.eval_dir, station=station, adapter_id=adapter_id)
+    import_training_samples(station, adapter_id, args.dataset, args.train_limit, text_field=args.text_field)
+    if args.no_eval_split:
+        print("Skipping eval/holdout export (--no-eval-split) -- voice/stt_local_train.py will "
+              "carve its own internal train/val/test split from the uploaded training samples instead.")
+    else:
+        export_eval_set(args.dataset, args.eval_limit, args.eval_dir, station=station, adapter_id=adapter_id,
+                         text_field=args.text_field)
 
     if args.train:
         station.start_training(adapter_id, backend=args.backend)

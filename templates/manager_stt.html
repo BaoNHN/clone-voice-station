@@ -217,7 +217,7 @@
 <!-- ══ Global table: every adapter, any owner ══ -->
 <div class="card">
   <h2>🗂️ Toàn bộ STT adapter (mọi client)</h2>
-  <p class="desc">Mọi adapter Tier 2 đã tạo — của khách (STT Lab) lẫn của manager. Publish/unpublish trực tiếp từ đây, kể cả adapter do khách tự huấn luyện.</p>
+  <p class="desc">Mọi adapter Tier 2 đã tạo — của khách (STT Lab) lẫn của manager. Publish/unpublish trực tiếp từ đây, kể cả adapter do khách tự huấn luyện. "Đặt làm mặc định" gán một adapter làm fallback cho toàn hệ thống, không cần chọn client. Thứ tự ưu tiên cho mỗi yêu cầu /api/transcribe: adapter publish riêng cho client đó → adapter mặc định hệ thống (nếu có) → PhoWhisper trên Colab (nếu đã kết nối) → Whisper chạy local trên CPU của máy chủ.</p>
   <div style="overflow-x:auto;">
     <table>
       <thead>
@@ -277,12 +277,29 @@ function clientOptionsHTML(selectedId) {
 // Publish block shared by both the owned-adapter card and the global table --
 // only ready+trained adapters (adapter_path set) can be published, matching
 // the server-side check in POST /manager/stt/adapters/{id}/publish.
+// Default block: independent of per-client publish above -- a manager can set
+// this adapter as the system-wide fallback for ANY client with nothing of its
+// own published, with no client_id involved at all (POST .../set-default).
+function defaultBlockHTML(a) {
+  const canDefault = a.status === 'ready' && a.adapter_path;
+  if (a.is_default) {
+    return `
+      <span class="publish-badge">⭐ Mặc định hệ thống</span>
+      <button class="btn ghost" data-action="unset-default" data-id="${a.id}">Bỏ mặc định</button>
+    `;
+  }
+  if (!canDefault) return '';
+  return `<button class="btn ghost" data-action="set-default" data-id="${a.id}">Đặt làm mặc định</button>`;
+}
+
 function publishBlockHTML(a, compact) {
   const canPublish = a.status === 'ready' && a.adapter_path;
+  const defaultHTML = defaultBlockHTML(a);
   if (a.is_published) {
     return `
       <span class="publish-badge">✅ Đang publish cho: ${escapeHtml(a.client_name || ('client #' + a.client_id))}</span>
       <button class="btn ghost" data-action="unpublish" data-id="${a.id}">Unpublish</button>
+      ${defaultHTML}
     `;
   }
   if (!canPublish) {
@@ -291,6 +308,7 @@ function publishBlockHTML(a, compact) {
   return `
     <select class="client-select" data-id="${a.id}">${clientOptionsHTML(null)}</select>
     <button class="btn" data-action="publish" data-id="${a.id}">Publish</button>
+    ${defaultHTML}
   `;
 }
 
@@ -556,6 +574,22 @@ async function unpublishAdapter(adapterId) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+async function setDefaultAdapter(adapterId) {
+  try {
+    await api(`/manager/stt/adapters/${adapterId}/set-default`, { method: 'POST' });
+    toast('Đã đặt làm adapter mặc định hệ thống.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function unsetDefaultAdapter(adapterId) {
+  try {
+    await api(`/manager/stt/adapters/${adapterId}/unset-default`, { method: 'POST' });
+    toast('Đã bỏ mặc định.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 function handleGlobalOrCardClick(e) {
   const pubBtn = e.target.closest('button[data-action="publish"]');
   if (pubBtn) {
@@ -567,6 +601,16 @@ function handleGlobalOrCardClick(e) {
   const unpubBtn = e.target.closest('button[data-action="unpublish"]');
   if (unpubBtn) {
     unpublishAdapter(Number(unpubBtn.dataset.id));
+    return true;
+  }
+  const setDefaultBtn = e.target.closest('button[data-action="set-default"]');
+  if (setDefaultBtn) {
+    setDefaultAdapter(Number(setDefaultBtn.dataset.id));
+    return true;
+  }
+  const unsetDefaultBtn = e.target.closest('button[data-action="unset-default"]');
+  if (unsetDefaultBtn) {
+    unsetDefaultAdapter(Number(unsetDefaultBtn.dataset.id));
     return true;
   }
   return false;

@@ -315,6 +315,9 @@ function adapterCardHTML(a) {
       </div>
 
       <div class="actions-row">
+        ${status === 'ready' ? (a.is_published
+          ? `<button class="btn ghost" data-action="unpublish">Bỏ publish</button>`
+          : `<button class="btn" data-action="publish">Publish</button>`) : ''}
         <button class="btn ghost" data-action="download">Tải xuống</button>
         <button class="btn danger" data-action="delete">Xoá adapter</button>
       </div>
@@ -537,6 +540,8 @@ document.getElementById('adaptersList').addEventListener('click', (e) => {
   else if (btn.dataset.action === 'train') trainAdapter(id);
   else if (btn.dataset.action === 'continue') continueAdapter(id);
   else if (btn.dataset.action === 'download') downloadAdapter(id);
+  else if (btn.dataset.action === 'publish') publishAdapter(id);
+  else if (btn.dataset.action === 'unpublish') unpublishAdapter(id);
   else if (btn.dataset.action === 'delete') deleteAdapter(id, name);
 });
 
@@ -623,6 +628,22 @@ async function continueAdapter(id) {
 
 async function downloadAdapter(id) {
   window.location.href = `/api/stt/adapters/${id}/download`;
+}
+
+async function publishAdapter(id) {
+  try {
+    await api(`/api/stt/adapters/${id}/publish`, { method: 'POST' });
+    toast('Đã publish adapter.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function unpublishAdapter(id) {
+  try {
+    await api(`/api/stt/adapters/${id}/unpublish`, { method: 'POST' });
+    toast('Đã bỏ publish.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function deleteAdapter(id, name) {

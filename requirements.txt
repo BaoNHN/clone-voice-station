@@ -33,6 +33,11 @@ faiss-cpu>=1.7.4
 resemblyzer>=0.1.4
 soundfile>=0.12.1
 
+# Also imported directly (not just pulled in transitively via resemblyzer above) by
+# voice/stt_adapter_infer.py and voice/stt_local_train.py to load audio at 16kHz mono
+# for Whisper LoRA adapter inference/training — a separate direct use, both lazy.
+librosa>=0.10.0
+
 # Voice feature — STT (voice/stt.py, POST /api/transcribe), the input half of
 # the voice loop. Also needs `ffmpeg` on PATH (Whisper shells out to it to
 # decode webm/ogg/m4a/mp3). Model itself is loaded lazily on first use.
