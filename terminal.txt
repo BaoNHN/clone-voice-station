@@ -63,7 +63,8 @@ nếu ffmpeg hệ thống bị lỗi.
 --------------------------------------------------------------------------
 Expose clone-voice-station (port 8090) ra internet:
 
-    set NGROK_AUTHTOKEN=your_token_o_day
+    # CMD:        set NGROK_AUTHTOKEN=your_token_o_day
+    # PowerShell: $env:NGROK_AUTHTOKEN = "your_token_o_day"
     python start_ngrok.py
 
 Lấy token tại https://dashboard.ngrok.com/tunnels/authtokens. Sau khi có

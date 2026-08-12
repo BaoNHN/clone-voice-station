@@ -401,7 +401,8 @@ Có 2 chặng tunnel **độc lập nhau**, dùng cho 2 mục đích khác nhau:
 ### Bước 1: Lộ clone-voice-station ra ngoài
 
 ```bash
-set NGROK_AUTHTOKEN=your_token   # lấy tại https://dashboard.ngrok.com/tunnels/authtokens
+set NGROK_AUTHTOKEN=your_token              # CMD -- lấy token tại https://dashboard.ngrok.com/tunnels/authtokens
+$env:NGROK_AUTHTOKEN = "your_token"         # PowerShell
 python start_ngrok.py
 ```
 
@@ -412,7 +413,8 @@ In ra một URL công khai (VD `https://xxxx.ngrok-free.app`) trỏ vào port 80
 `rag-legal-assistant` và `voice-lab-example` đều đọc địa chỉ clone-voice-station qua biến môi trường `VOICE_STATION_URL` (`clone_voice_client`, xem `voice/station_client.py` phía rag-legal-assistant) — **chỉ set lúc khởi động, không có form nhập URL lúc đang chạy**, nên phải set biến rồi khởi động lại app đó:
 
 ```bash
-set VOICE_STATION_URL=https://xxxx.ngrok-free.app
+set VOICE_STATION_URL=https://xxxx.ngrok-free.app          # CMD
+$env:VOICE_STATION_URL = "https://xxxx.ngrok-free.app"     # PowerShell
 python app.py
 ```
 

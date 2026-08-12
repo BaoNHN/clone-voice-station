@@ -259,7 +259,8 @@ python app.py</code></pre>
 
     <h3>Bước 1 — Lộ clone-voice-station ra ngoài</h3>
     <pre><code>cd clone-voice-station
-set NGROK_AUTHTOKEN=your_token
+# CMD:        set NGROK_AUTHTOKEN=your_token
+# PowerShell: $env:NGROK_AUTHTOKEN = "your_token"
 python start_ngrok.py</code></pre>
     <p>In ra URL công khai dạng <code>https://xxxx.ngrok-free.app</code>. Giữ cửa sổ này chạy — tunnel tắt khi đóng.</p>
 
@@ -270,12 +271,14 @@ python start_ngrok.py</code></pre>
       <li>voice-lab-example: mở <code>http://127.0.0.1:8091/settings</code> (không cần đăng nhập) → dán URL → Lưu.</li>
     </ul>
     <p><strong>Cách cũ (cần restart app):</strong></p>
-    <pre><code>set VOICE_STATION_URL=https://xxxx.ngrok-free.app
+    <pre><code># CMD:        set VOICE_STATION_URL=https://xxxx.ngrok-free.app
+# PowerShell: $env:VOICE_STATION_URL = "https://xxxx.ngrok-free.app"
 python app.py</code></pre>
 
     <h3>Bước 3 (tuỳ chọn) — Lộ luôn giao diện app ra ngoài</h3>
     <pre><code>cd rag-legal-assistant   (hoặc voice-lab-example)
-set NGROK_AUTHTOKEN=your_token
+# CMD:        set NGROK_AUTHTOKEN=your_token
+# PowerShell: $env:NGROK_AUTHTOKEN = "your_token"
 python start_ngrok.py</code></pre>
 
     <div class="box danger">

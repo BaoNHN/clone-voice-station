@@ -75,7 +75,8 @@ Mỗi app runnable (`clone-voice-station`, `rag-legal-assistant`, `voice-lab-exa
 ### Bước 1 — Lộ clone-voice-station ra ngoài
 ```bash
 cd clone-voice-station
-set NGROK_AUTHTOKEN=your_token
+set NGROK_AUTHTOKEN=your_token          # CMD
+$env:NGROK_AUTHTOKEN = "your_token"     # PowerShell
 python start_ngrok.py
 ```
 In ra URL công khai, ví dụ `https://xxxx.ngrok-free.app`. Giữ cửa sổ này chạy — tunnel tắt khi đóng.
@@ -88,7 +89,8 @@ In ra URL công khai, ví dụ `https://xxxx.ngrok-free.app`. Giữ cửa sổ n
 
 **Cách cũ (biến môi trường, cần khởi động lại app):**
 ```bash
-set VOICE_STATION_URL=https://xxxx.ngrok-free.app
+set VOICE_STATION_URL=https://xxxx.ngrok-free.app          # CMD
+$env:VOICE_STATION_URL = "https://xxxx.ngrok-free.app"     # PowerShell
 python app.py
 ```
 
@@ -96,7 +98,8 @@ python app.py
 Nếu muốn người ngoài truy cập thẳng giao diện chat/demo (không chỉ gọi API), chạy `start_ngrok.py` tương ứng trong thư mục app đó — độc lập với Bước 1:
 ```bash
 cd rag-legal-assistant   (hoặc voice-lab-example)
-set NGROK_AUTHTOKEN=your_token
+set NGROK_AUTHTOKEN=your_token          # CMD
+$env:NGROK_AUTHTOKEN = "your_token"     # PowerShell
 python start_ngrok.py
 ```
 
