@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hướng Dẫn Chạy Demo — Hệ Thống Voice AI</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-alt: #f6f7f9;
+    --text: #1c1f26;
+    --text-dim: #5b6270;
+    --border: #e2e5ea;
+    --accent: #2e5aac;
+    --accent-soft: #eaf0fb;
+    --code-bg: #1c1f26;
+    --code-text: #e8eaf0;
+    --warn-bg: #fdf2e9;
+    --warn-border: #e8a54b;
+    --danger-bg: #fdecec;
+    --danger-border: #d9534f;
+    --ok-bg: #eaf7ee;
+    --ok-border: #3fa85c;
+    --pill-8000: #2e5aac;
+    --pill-8090: #b9770e;
+    --pill-8091: #7d3c98;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --bg-alt: #1b1e24;
+      --text: #e7e9ee;
+      --text-dim: #9aa1ae;
+      --border: #2b2f38;
+      --accent: #7fa6f5;
+      --accent-soft: #1e2a42;
+      --code-bg: #0d0f13;
+      --code-text: #e8eaf0;
+      --warn-bg: #332a1a;
+      --warn-border: #c68a3b;
+      --danger-bg: #3a2020;
+      --danger-border: #d9534f;
+      --ok-bg: #17301f;
+      --ok-border: #3fa85c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+    line-height: 1.6;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; }
+    nav.toc { position: static !important; border-right: none !important; border-bottom: 1px solid var(--border); }
+  }
+  nav.toc {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 18px;
+    border-right: 1px solid var(--border);
+    background: var(--bg-alt);
+  }
+  nav.toc h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); margin: 0 0 12px; }
+  nav.toc ul { list-style: none; margin: 0; padding: 0; }
+  nav.toc li { margin: 2px 0; }
+  nav.toc a {
+    display: block; padding: 7px 10px; border-radius: 6px;
+    color: var(--text); text-decoration: none; font-size: 14px;
+  }
+  nav.toc a:hover { background: var(--accent-soft); color: var(--accent); }
+  main { padding: 40px 44px 100px; min-width: 0; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  .subtitle { color: var(--text-dim); margin: 0 0 32px; font-size: 15px; }
+  h2 {
+    font-size: 20px; margin: 48px 0 14px; padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+  h2:first-of-type { border-top: none; margin-top: 0; }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  p { margin: 10px 0; }
+  code {
+    background: var(--bg-alt); border: 1px solid var(--border);
+    padding: 1px 6px; border-radius: 4px; font-size: 13px;
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  pre {
+    background: var(--code-bg); color: var(--code-text);
+    padding: 14px 16px; border-radius: 8px; overflow-x: auto;
+    font-size: 13px; line-height: 1.55;
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  pre code { background: none; border: none; padding: 0; color: inherit; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 20px; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--bg-alt); }
+  .pill {
+    display: inline-block; padding: 2px 9px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; color: #fff;
+  }
+  .pill.p8000 { background: var(--pill-8000); }
+  .pill.p8090 { background: var(--pill-8090); }
+  .pill.p8091 { background: var(--pill-8091); }
+  .box { border-radius: 8px; padding: 14px 16px; margin: 14px 0; border: 1px solid; }
+  .box.warn { background: var(--warn-bg); border-color: var(--warn-border); }
+  .box.danger { background: var(--danger-bg); border-color: var(--danger-border); }
+  .box.ok { background: var(--ok-bg); border-color: var(--ok-border); }
+  .box strong.label { display: block; margin-bottom: 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+  .arch {
+    display: grid; gap: 10px; margin: 18px 0 26px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+  .arch .node {
+    border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: var(--bg-alt);
+  }
+  .arch .node h4 { margin: 0 0 4px; font-size: 14px; }
+  .arch .node p { margin: 0; font-size: 12.5px; color: var(--text-dim); }
+  .step-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%; background: var(--accent);
+    color: #fff; font-size: 12px; font-weight: 700; margin-right: 8px;
+  }
+  footer { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <h2>Mục lục</h2>
+    <ul>
+      <li><a href="#tongquan">0. Tổng quan hệ thống</a></li>
+      <li><a href="#thumuc">1. Cấu trúc thư mục</a></li>
+      <li><a href="#caidat">2. Cài đặt lần đầu</a></li>
+      <li><a href="#chaynhanh">3. Chạy nhanh (1 lệnh)</a></li>
+      <li><a href="#chaytaytay">4. Chạy thủ công từng service</a></li>
+      <li><a href="#config">5. Config / tài khoản mặc định</a></li>
+      <li><a href="#ngrok">6. Demo công khai qua ngrok</a></li>
+      <li><a href="#loi">7. Xử lý lỗi thường gặp</a></li>
+    </ul>
+  </nav>
+
+  <main>
+    <h1>Hướng Dẫn Chạy Demo — Hệ Thống Voice AI</h1>
+    <p class="subtitle">rag-legal-assistant · clone-voice-station · voice-lab-example · clone-voice-client</p>
+
+    <h2 id="tongquan">0. Tổng quan hệ thống</h2>
+    <p>rag-legal-assistant gọi clone-voice-station qua HTTP (thông qua SDK clone-voice-client) để lấy tính năng STT/TTS/RVC. voice-lab-example là app demo độc lập, minh hoạ chạy Whisper local so với gọi qua mạng. clone-voice-client không phải service — chỉ là thư viện Python được import bên trong 2 app kia.</p>
+
+    <div class="arch">
+      <div class="node">
+        <h4><span class="pill p8000">8000</span> rag-legal-assistant</h4>
+        <p>RAG trợ lý pháp lý (FastAPI). Gọi clone-voice-station để có mic input + đọc giọng.</p>
+      </div>
+      <div class="node">
+        <h4><span class="pill p8090">8090</span> clone-voice-station</h4>
+        <p>Service STT/TTS/RVC độc lập, đa client, có manager dashboard.</p>
+      </div>
+      <div class="node">
+        <h4><span class="pill p8091">8091</span> Local RVC Worker</h4>
+        <p>Cache model RVC trong RAM cho clone-voice-station — tăng tốc lần đọc thứ 2 trở đi (~0.5–5s so với ~65s lần đầu).</p>
+      </div>
+      <div class="node">
+        <h4><span class="pill p8091">8091</span> voice-lab-example</h4>
+        <p>App demo độc lập — <strong>trùng port với Local RVC Worker</strong>, không chạy đồng thời cả hai.</p>
+      </div>
+    </div>
+
+    <div class="box warn">
+      <strong class="label">Lưu ý port</strong>
+      Local RVC Worker và voice-lab-example đều mặc định port 8091 nhưng không liên quan nhau. Không bật cả hai cùng lúc trong một buổi demo trừ khi đã đổi port một trong hai.
+    </div>
+
+    <h2 id="thumuc">1. Cấu trúc thư mục bắt buộc</h2>
+    <p>4 thư mục phải nằm cùng cấp (anh em):</p>
+    <pre><code>D:\hoc\project\
+├── clone-voice-station\
+├── clone-voice-client\      ← thư viện dùng chung, KHÔNG tự chạy, không có app.py
+├── rag-legal-assistant\
+└── voice-lab-example\</code></pre>
+    <p><code>clone-voice-client</code> không cần tự <code>pip install</code> — <code>rag-legal-assistant/requirements.txt</code> và <code>voice-lab-example/requirements.txt</code> đều có dòng <code>-e ../clone-voice-client[local]</code>, tự cài khi chạy <code>pip install -r requirements.txt</code>, miễn là thư mục nằm đúng vị trí tương đối. Thiếu thư mục này thì <strong>cả 2 app đều không cài được</strong>.</p>
+
+    <h2 id="caidat">2. Cài đặt lần đầu</h2>
+    <pre><code>cd clone-voice-station
+pip install -r requirements.txt
+
+cd rag-legal-assistant
+install.bat            <span style="color:#8a93a3"># chọn CUDA 11.8 / 12.1 / CPU, tự pip install luôn</span>
+
+cd voice-lab-example
+pip install -r requirements.txt</code></pre>
+    <p>rag-legal-assistant cần thêm <code>groqkey.txt</code> (API key Groq, dạng <code>gsk_xxxx...</code>) ở thư mục gốc — xem mục 5.</p>
+
+    <h2 id="chaynhanh">3. Chạy nhanh — 1 lệnh khởi động cả 3</h2>
+    <pre><code>D:\hoc\project\rag-legal-assistant\start_all.bat</code></pre>
+    <p>Thứ tự tự động, có health-check giữa mỗi bước:</p>
+    <ol>
+      <li><span class="step-num">1</span>Local RVC Worker <span class="pill p8091">8091</span> — cửa sổ cmd riêng</li>
+      <li><span class="step-num">2</span>Clone Voice Station <span class="pill p8090">8090</span> — cửa sổ cmd riêng</li>
+      <li><span class="step-num">3</span>rag-legal-assistant <span class="pill p8000">8000</span> — chạy ngay trong cửa sổ hiện tại</li>
+    </ol>
+    <div class="box ok">
+      <strong class="label">Sau khi lên</strong>
+      Vào <code>http://127.0.0.1:8000</code>, đăng nhập <code>admin1 / Admin@123</code>.
+    </div>
+
+    <h2 id="chaytaytay">4. Chạy thủ công từng service</h2>
+    <p>Dùng khi cần xem log lỗi trực tiếp, hoặc chỉ muốn chạy một phần hệ thống.</p>
+    <h3>Local RVC Worker <span class="pill p8091">8091</span> (tuỳ chọn nhưng nên bật)</h3>
+    <pre><code>cd /d D:\hoc\project\clone-voice-station\local_rvc
+venv\Scripts\python.exe local_rvc_server.py</code></pre>
+    <p>venv riêng, không dùng chung với env chính. Nếu venv chưa có, lần đầu dùng RVC local sẽ tự tạo (cần <code>git</code> trong PATH để clone RVC-Project WebUI).</p>
+
+    <h3>Clone Voice Station <span class="pill p8090">8090</span></h3>
+    <pre><code>cd /d D:\hoc\project\clone-voice-station
+python app.py</code></pre>
+    <p>Không cần Groq/LLM key. Lần đầu chạy sẽ tự seed DB và <strong>in ra 1 lần duy nhất</strong>: API key cho client <code>rag-legal-assistant</code> + tài khoản manager mặc định — chép lại ngay, không hiện lại lần sau.</p>
+
+    <h3>rag-legal-assistant <span class="pill p8000">8000</span></h3>
+    <pre><code>cd /d D:\hoc\project\rag-legal-assistant
+python app.py</code></pre>
+
+    <h3>voice-lab-example <span class="pill p8091">8091</span></h3>
+    <pre><code>cd /d D:\hoc\project\voice-lab-example
+python app.py</code></pre>
+    <p>Tự tải dataset demo (~2k dòng) + build index TF-IDF trong RAM ở lần chạy đầu. Muốn bật so sánh với clone-voice-station (trang <code>/compare</code>) thì cần thêm API key riêng — xem file <code>terminal.txt</code> trong thư mục đó.</p>
+
+    <h2 id="config">5. Config &amp; tài khoản mặc định</h2>
+    <table>
+      <tr><th>File</th><th>Ở đâu</th><th>Ý nghĩa</th></tr>
+      <tr><td><code>groqkey.txt</code></td><td>rag-legal-assistant/</td><td>API key Groq (LLM), 1 dòng/key, có thể nhiều key để tự xoay khi rate-limit</td></tr>
+      <tr><td><code>voice_station_key.txt</code></td><td>rag-legal-assistant/, voice-lab-example/</td><td>API key gọi clone-voice-station — lấy từ log lần đầu chạy clone-voice-station</td></tr>
+      <tr><td><code>session_secret.txt</code></td><td>mỗi project có service web</td><td>Tự sinh nếu chưa có</td></tr>
+      <tr><td><code>.device_config</code></td><td>rag-legal-assistant/</td><td>Ghi bởi install.bat (CUDA/CPU)</td></tr>
+      <tr><td><code>voice_station_url_override.txt</code></td><td>rag-legal-assistant/</td><td>Tạo qua admin UI khi đổi endpoint (VD sang URL ngrok) mà không cần restart</td></tr>
+    </table>
+    <p><strong>Tài khoản mặc định</strong> (rag-legal-assistant, tự seed khi bảng users rỗng):</p>
+    <ul>
+      <li><code>admin1 / Admin@123</code></li>
+      <li><code>teacher1 / Teacher@123</code></li>
+      <li><code>testStudent1 / 123456P@ss</code></li>
+    </ul>
+    <p>ffmpeg cần có trong PATH cho cả 3 project (edge-TTS/Whisper/pydub). clone-voice-station có sẵn bản tĩnh tại <code>clone-voice-station\bin\ffmpeg.exe</code> — các app khác có thể trỏ <code>CLONE_VOICE_FFMPEG_DIR</code> vào đây nếu ffmpeg hệ thống lỗi.</p>
+
+    <h2 id="ngrok">6. Demo công khai qua ngrok</h2>
+    <p>Mỗi app runnable (clone-voice-station, rag-legal-assistant, voice-lab-example) có sẵn <code>start_ngrok.py</code> riêng, lộ đúng port của app đó.</p>
+
+    <h3>Bước 1 — Lộ clone-voice-station ra ngoài</h3>
+    <pre><code>cd clone-voice-station
+set NGROK_AUTHTOKEN=your_token
+python start_ngrok.py</code></pre>
+    <p>In ra URL công khai dạng <code>https://xxxx.ngrok-free.app</code>. Giữ cửa sổ này chạy — tunnel tắt khi đóng.</p>
+
+    <h3>Bước 2 — Trỏ rag-legal-assistant / voice-lab-example vào URL đó</h3>
+    <p><strong>Cách mới (khuyến nghị — không cần restart app):</strong></p>
+    <ul>
+      <li>rag-legal-assistant: đăng nhập admin → <em>"Quản lý mô hình giọng nói"</em> → ô <em>"Kết nối máy chủ giọng nói"</em> → dán URL ngrok → Lưu.</li>
+      <li>voice-lab-example: mở <code>http://127.0.0.1:8091/settings</code> (không cần đăng nhập) → dán URL → Lưu.</li>
+    </ul>
+    <p><strong>Cách cũ (cần restart app):</strong></p>
+    <pre><code>set VOICE_STATION_URL=https://xxxx.ngrok-free.app
+python app.py</code></pre>
+
+    <h3>Bước 3 (tuỳ chọn) — Lộ luôn giao diện app ra ngoài</h3>
+    <pre><code>cd rag-legal-assistant   (hoặc voice-lab-example)
+set NGROK_AUTHTOKEN=your_token
+python start_ngrok.py</code></pre>
+
+    <div class="box danger">
+      <strong class="label">Cảnh báo bảo mật</strong>
+      Authtoken cũ từng bị hardcode trong <code>start_ngrok.py</code> và đã lọt vào lịch sử git (đã push lên GitHub). Phải revoke/rotate token đó tại <a href="https://dashboard.ngrok.com/tunnels/authtokens" target="_blank" rel="noopener">dashboard.ngrok.com/tunnels/authtokens</a> — xoá khỏi file hiện tại không đủ vì lịch sử git vẫn còn token cũ.
+    </div>
+    <p>Mỗi <code>start_ngrok.py</code> cần <code>NGROK_AUTHTOKEN</code> riêng (hoặc dùng chung 1 token nếu gói ngrok cho phép nhiều tunnel). URL ngrok free đổi mỗi lần restart — phải lặp lại Bước 2. <code>clone-voice-client</code> không bao giờ cần tunnel riêng — nó không phải service.</p>
+
+    <h3>Backend RVC/PhoWhisper trên Colab (tuỳ chọn, thay máy local)</h3>
+    <p>Chạy <code>colab/voice_server.ipynb</code> trên Google Colab — notebook tự tải <code>cloudflared</code> và mở tunnel, in ra URL (khác cơ chế ngrok ở trên). Dán URL đó vào clone-voice-station: đăng nhập <code>http://127.0.0.1:8090/login</code> → mục <em>"Kết nối RVC (Colab)"</em> → Endpoint URL → Lưu endpoint.</p>
+    <div class="box warn">
+      <strong class="label">Lưu ý Colab</strong>
+      Không dừng/restart runtime khi đang dùng — cloudflared sẽ đổi URL mới. Tunnel free hết hạn sau vài giờ, phải chạy lại notebook + dán lại URL.
+    </div>
+
+    <h2 id="loi">7. Xử lý lỗi thường gặp</h2>
+    <h3>start_all.bat "thoát ra quá nhanh"</h3>
+    <p>Thường do port 8000/8090/8091 đã bị process khác chiếm sẵn (VD chạy tay từ trước). Kiểm tra:</p>
+    <pre><code>netstat -ano | findstr ":8000 :8090 :8091"</code></pre>
+    <p>Nếu thấy dòng "LISTENING", lấy PID (cột cuối) rồi tắt:</p>
+    <pre><code>taskkill /F /PID &lt;số_PID&gt;</code></pre>
+
+    <h3>Cửa sổ Local RVC Worker / Clone Voice Station đóng ngay</h3>
+    <p>Mở lại bằng tay (mục 4) để đọc lỗi trực tiếp thay vì qua start_all.bat.</p>
+
+    <h3>Kiểm tra rvc_endpoint đang trỏ đúng chưa</h3>
+    <pre><code>cd /d D:\hoc\project\clone-voice-station
+python -c "from database.database import get_setting; print(get_setting('rvc_endpoint'))"</code></pre>
+    <p>Phải là <code>http://127.0.0.1:8091</code> khi dùng Local RVC Worker, hoặc URL cloudflared khi dùng Colab.</p>
+
+    <footer>
+      Chi tiết từng tính năng: xem <code>terminal.txt</code> trong từng thư mục project, và <code>HUONG_DAN_DEMO.md</code> / <code>HUONG_DAN_CHAY_TOAN_HE_THONG.md</code>.
+    </footer>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,91 @@
+CÁCH CHẠY clone-voice-station + NGROK
+==========================================================================
+clone-voice-station là service độc lập (STT/TTS/RVC), được các app khác
+(rag-legal-assistant, voice-lab-example) gọi qua HTTP. Có thể chạy một
+mình để test, không bắt buộc phải có app gọi nó.
+
+--------------------------------------------------------------------------
+1. CHẠY SERVICE CHÍNH
+--------------------------------------------------------------------------
+    cd /d D:\hoc\project\clone-voice-station
+    python app.py
+
+Mặc định port 8090. Nếu dùng chung máy với rag-legal-assistant, cần
+activate đúng conda env trước (như start_all.bat bên rag-legal-assistant
+đang làm):
+
+    call D:\anaconda3\condabin\conda.bat activate rag_env
+    cd /d D:\hoc\project\clone-voice-station
+    python app.py
+
+--------------------------------------------------------------------------
+2. LOCAL RVC WORKER (cache model RAM, tuỳ chọn nhưng nên bật)
+--------------------------------------------------------------------------
+Chạy riêng, venv riêng (không dùng chung với env của app.py chính):
+
+    cd /d D:\hoc\project\clone-voice-station\local_rvc
+    venv\Scripts\python.exe local_rvc_server.py
+
+Mặc định port 8091 (đổi bằng biến môi trường LOCAL_RVC_PORT nếu cần).
+Đây chỉ là lớp cache tăng tốc — nếu không chạy, RVC vẫn hoạt động qua
+đường subprocess chậm hơn (voice/rvc_local.py tự fallback).
+
+Nếu venv chưa tồn tại: lần đầu dùng RVC local, voice/rvc_local.py sẽ tự
+tạo venv này + tự clone RVC-Project WebUI vào local_rvc/RVC (cần "git"
+có trong PATH).
+
+--------------------------------------------------------------------------
+3. LẦN ĐẦU CHẠY (tự seed dữ liệu)
+--------------------------------------------------------------------------
+Không cần Groq key hay bất kỳ LLM key nào. Lần đầu python app.py chạy,
+voice_station.db tự tạo và in ra terminal (chỉ 1 lần, không hiện lại):
+
+    [clone-voice-station] Seeded client 'rag-legal-assistant' — API key: <KEY>
+    [clone-voice-station] Put this key in rag-legal-assistant/voice_station_key.txt
+    [clone-voice-station] Seeded manager account — username: manager  password: <PASS>
+    [clone-voice-station] Log in at http://127.0.0.1:8090/login and change this password.
+
+-> copy API key vào D:\hoc\project\rag-legal-assistant\voice_station_key.txt
+-> đổi mật khẩu manager ngay sau khi đăng nhập lần đầu (không có màn hình
+   quên mật khẩu — quên thì phải sửa trực tiếp trong bảng managers).
+
+ffmpeg cần có trong PATH (dùng cho edge-TTS/Whisper/pydub). Có sẵn bản
+tĩnh tại clone-voice-station\bin\ffmpeg.exe cho các app khác dùng lại
+nếu ffmpeg hệ thống bị lỗi.
+
+--------------------------------------------------------------------------
+4. CHẠY NGROK (demo công khai qua internet, tuỳ chọn)
+--------------------------------------------------------------------------
+Expose clone-voice-station (port 8090) ra internet:
+
+    set NGROK_AUTHTOKEN=your_token_o_day
+    python start_ngrok.py
+
+Lấy token tại https://dashboard.ngrok.com/tunnels/authtokens. Sau khi có
+URL public, dán vào app đang gọi service này:
+  - rag-legal-assistant: đăng nhập admin -> "Quản lý mô hình giọng nói"
+    -> "Kết nối máy chủ giọng nói" (áp dụng ngay, không cần restart).
+  - voice-lab-example: http://127.0.0.1:8091/settings, hoặc set biến môi
+    trường VOICE_STATION_URL=https://xxxx.ngrok-free.app rồi restart app.
+
+URL ngrok free đổi mỗi lần chạy lại start_ngrok.py -> phải dán lại.
+
+CẢNH BÁO: authtoken cũ từng bị hardcode trong start_ngrok.py và đã lọt
+vào lịch sử git (đã push lên GitHub) — phải revoke/rotate token đó tại
+https://dashboard.ngrok.com/tunnels/authtokens.
+
+--------------------------------------------------------------------------
+5. BACKEND RVC/PhoWhisper CHẠY TRÊN COLAB (tuỳ chọn, thay cho máy local)
+--------------------------------------------------------------------------
+Dùng colab/voice_server.ipynb khi máy không đủ GPU. Notebook tự tải
+cloudflared và mở tunnel:
+
+    cloudflared tunnel --url http://localhost:<SERVER_PORT> --no-autoupdate
+
+URL cloudflared in ra (không phải ngrok) -> dán vào manager dashboard:
+đăng nhập http://127.0.0.1:8090/login -> mục "Kết nối RVC (Colab)" ->
+"Endpoint URL" -> Lưu endpoint.
+
+LƯU Ý: không được dừng/restart Colab runtime khi đang dùng — cloudflared
+sẽ đổi URL mới và phải dán lại. Tunnel free hết hạn sau vài giờ, phải
+chạy lại notebook + dán lại URL.
