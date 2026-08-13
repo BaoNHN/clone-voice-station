@@ -215,7 +215,16 @@
 <!-- ══ Global table: every adapter, any owner ══ -->
 <div class="card">
   <h2>🗂️ Toàn bộ STT adapter (mọi client)</h2>
-  <p class="desc">Mọi adapter Tier 2 đã tạo — của khách (STT Lab) lẫn của manager. Publish cho một client cụ thể là khách tự làm ở STT Lab (self-serve); ở đây chỉ xem trạng thái publish và có thể thu hồi (unpublish) nếu cần. "Đặt làm mặc định" gán một adapter làm fallback cho toàn hệ thống, không cần chọn client. Thứ tự ưu tiên cho mỗi yêu cầu /api/transcribe: adapter publish riêng cho client đó → adapter mặc định hệ thống (nếu có) → PhoWhisper trên Colab (nếu đã kết nối) → Whisper chạy local trên CPU của máy chủ.</p>
+  <p class="desc">Mọi adapter Tier 2 đã tạo — của khách (STT Lab) lẫn của manager. Publish cho một client cụ thể là khách tự làm ở STT Lab (self-serve); ở đây chỉ xem trạng thái publish và có thể thu hồi (unpublish) nếu cần. "Đặt làm mặc định" gán một adapter làm fallback cho toàn hệ thống, không cần chọn client. Thứ tự ưu tiên cho mỗi yêu cầu /api/transcribe: adapter publish riêng cho client đó → adapter mặc định hệ thống (nếu có) → PhoWhisper trên Colab (nếu đã kết nối) → PhoWhisper-small chạy local trên máy chủ.</p>
+  <div class="field" style="max-width:320px;">
+    <label>Lọc theo Base model</label>
+    <select id="globalBaseModelFilter" onchange="renderGlobalTable(_lastAdapters)">
+      <option value="">Tất cả</option>
+      <option value="phowhisper-small">PhoWhisper-small</option>
+      <option value="whisper-tiny">whisper-tiny</option>
+      <option value="whisper-base">whisper-base</option>
+    </select>
+  </div>
   <div style="overflow-x:auto;">
     <table>
       <thead>
@@ -417,10 +426,43 @@ function renderTrainingProgress(adapters) {
   `).join('');
 }
 
-function renderGlobalTable(adapters) {
+function originalModelRowHTML(currentDefault) {
+  const defaultCell = currentDefault
+    ? `<button class="btn ghost" data-action="set-default-original">Đặt làm mặc định</button>`
+    : `<span class="publish-badge">⭐ Mặc định hệ thống</span>`;
+  return `
+    <tr class="original-model-row">
+      <td>—</td>
+      <td>PhoWhisper-small (bản gốc — không adapter)</td>
+      <td><span class="tag">phowhisper-small</span></td>
+      <td><span class="status-pill ready">Luôn sẵn sàng</span></td>
+      <td>Hệ thống</td>
+      <td colspan="2">${defaultCell}</td>
+    </tr>
+  `;
+}
+
+async function setDefaultToOriginalModel() {
+  const current = _lastAdapters.find(a => a.is_default);
+  if (!current) return;
+  try {
+    await api(`/manager/stt/adapters/${current.id}/unset-default`, { method: 'POST' });
+    toast('Đã đặt PhoWhisper-small (bản gốc) làm mặc định.');
+    loadAdapters();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function renderGlobalTable(allAdapters) {
+  const filterVal = document.getElementById('globalBaseModelFilter').value;
+  const adapters = filterVal ? allAdapters.filter(a => a.base_model === filterVal) : allAdapters;
   const body = document.getElementById('globalAdaptersBody');
   document.getElementById('globalAdaptersEmpty').style.display = adapters.length ? 'none' : 'block';
-  body.innerHTML = adapters.map(a => `
+  document.getElementById('globalAdaptersEmpty').textContent = allAdapters.length
+    ? 'Không có adapter nào khớp base model đã chọn.'
+    : 'Chưa có adapter STT nào trong hệ thống.';
+
+  const currentDefault = allAdapters.find(a => a.is_default);
+  const rows = adapters.map(a => `
     <tr data-global-row="${a.id}">
       <td>${a.id}</td>
       <td>${escapeHtml(a.name)}</td>
@@ -430,6 +472,7 @@ function renderGlobalTable(adapters) {
       <td colspan="2"><div class="publish-row" data-publish-for="${a.id}">${publishBlockHTML(a)}</div></td>
     </tr>
   `).join('');
+  body.innerHTML = originalModelRowHTML(currentDefault) + rows;
 }
 
 function updateHwCount(id) {
@@ -576,6 +619,11 @@ function handleGlobalOrCardClick(e) {
   const unsetDefaultBtn = e.target.closest('button[data-action="unset-default"]');
   if (unsetDefaultBtn) {
     unsetDefaultAdapter(Number(unsetDefaultBtn.dataset.id));
+    return true;
+  }
+  const setDefaultOriginalBtn = e.target.closest('button[data-action="set-default-original"]');
+  if (setDefaultOriginalBtn) {
+    setDefaultToOriginalModel();
     return true;
   }
   return false;

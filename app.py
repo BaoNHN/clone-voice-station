@@ -1194,6 +1194,17 @@ async def download_stt_adapter_route(adapter_id: int, guest_id: int = Depends(re
     return _build_stt_pack_response(adapter)
 
 
+@app.get("/api/stt/default_pack/status")
+async def default_stt_pack_status_route(guest_id: int = Depends(require_stt_guest)):
+    """Lets the STT Lab guest dashboard show whether a system default exists
+    (and which) before the guest clicks download, instead of only finding out
+    via a 404 from the download route below."""
+    adapter = get_default_stt_adapter()
+    if not adapter:
+        return {"available": False}
+    return {"available": True, "name": adapter["name"], "base_model": adapter["base_model"]}
+
+
 @app.get("/api/stt/default_pack/download")
 async def download_default_stt_pack_route(guest_id: int = Depends(require_stt_guest)):
     """Lets any logged-in STT Lab guest grab the current system-wide default
@@ -1206,7 +1217,8 @@ async def download_default_stt_pack_route(guest_id: int = Depends(require_stt_gu
     other way to find/download it if they don't happen to own it themselves."""
     adapter = get_default_stt_adapter()
     if not adapter:
-        raise HTTPException(status_code=404, detail="Hệ thống chưa có adapter mặc định nào.")
+        raise HTTPException(status_code=404,
+            detail="Mặc định hệ thống hiện là PhoWhisper-small gốc (không adapter) — không có pack để tải.")
     return _build_stt_pack_response(adapter)
 
 

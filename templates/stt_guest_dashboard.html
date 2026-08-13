@@ -215,7 +215,8 @@
 <div class="card">
   <h2>⭐ Adapter mặc định hệ thống</h2>
   <p class="desc">Tải về adapter mà manager đã đặt làm mặc định cho toàn hệ thống (dùng cho mọi client chưa tự publish adapter riêng) — dùng để chạy thử ngay qua <span class="mono" style="font-family:'SF Mono',Consolas,monospace;">clone_voice_client.local_stt</span> (vd <span class="mono" style="font-family:'SF Mono',Consolas,monospace;">voice-lab-example</span>'s <span class="mono" style="font-family:'SF Mono',Consolas,monospace;">/settings</span>), không cần tự tạo/huấn luyện adapter nào.</p>
-  <button class="btn ghost" onclick="downloadDefaultPack()">Tải xuống adapter mặc định</button>
+  <p class="desc" id="defaultPackStatus" style="font-style:italic;"></p>
+  <button class="btn ghost" id="defaultPackBtn" onclick="downloadDefaultPack()" disabled>Tải xuống adapter mặc định</button>
 </div>
 
 <!-- ══ Adapters ══ -->
@@ -688,7 +689,26 @@ async function deleteAdapter(id, name) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+async function checkDefaultPack() {
+  const statusEl = document.getElementById('defaultPackStatus');
+  const btn = document.getElementById('defaultPackBtn');
+  try {
+    const data = await api('/api/stt/default_pack/status');
+    if (data.available) {
+      statusEl.textContent = `Hiện có: "${data.name}" (${data.base_model}).`;
+      btn.disabled = false;
+    } else {
+      statusEl.textContent = 'Hệ thống đang mặc định dùng PhoWhisper-small gốc (không adapter) — bản gốc không đóng gói thành .stt-pack.zip nên không có gì để tải; muốn chạy local, dùng thẳng vinai/PhoWhisper-small.';
+      btn.disabled = true;
+    }
+  } catch (e) {
+    statusEl.textContent = '';
+    btn.disabled = true;
+  }
+}
+
 loadAdapters();
+checkDefaultPack();
 </script>
 </body>
 </html>
