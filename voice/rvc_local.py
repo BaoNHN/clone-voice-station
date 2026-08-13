@@ -159,7 +159,27 @@ _EPOCH_MARKER = "====> "
 
 # convert_local() shells out to infer/cli.py per call (no cached in-process model --
 # see its docstring for why), so this only needs to bound one subprocess's runtime.
-CONVERT_TIMEOUT_SEC = 120
+# Measured directly (2026-08-13, same hardware): a clean, uncontended call took 61s
+# wall-clock even though the tool's own reported inference time (Features+F0+Synthesis)
+# was only ~10s -- the rest is fixed per-call overhead (interpreter start, torch/CUDA
+# import, CUDA init, loading the .pth/.index from disk). That's already up from an
+# earlier ~34s measurement (see rag-legal-assistant's station_client.py comment) --
+# the leading suspect is voice/stt.py's PhoWhisper-small now sitting persistently in
+# this same GPU's VRAM as the STT fallback (added this session), adding contention
+# for a separate subprocess's own CUDA init/inference. 120 was cutting a *single*,
+# uncontended call close with real-world variance on top of it; callers upstream
+# (station_client.py's speak_timeout) must stay comfortably above this value.
+CONVERT_TIMEOUT_SEC = 150
+
+# Serializes convert_local() calls -- without this, concurrent /api/speak requests
+# (e.g. a caller retrying because a prior call felt slow) each spawn their own
+# infer.cli subprocess with no coordination, and since there's only one local GPU,
+# they don't run in parallel so much as fight each other for it: confirmed for real,
+# 4 infer.cli processes for the same speaker running at once, each taking far longer
+# than CONVERT_TIMEOUT_SEC/1 would alone. A single GPU has no real parallelism to
+# offer here anyway, so queuing calls one at a time is strictly better than letting
+# them contend.
+_convert_lock = threading.Lock()
 
 
 def device() -> str:
@@ -474,40 +494,41 @@ def convert_local(audio_bytes: bytes, speaker_id: str, pitch: int = None,
     out_path = in_path + "_rvc.wav"
 
     try:
-        # PYTHONUTF8=1: infer/cli.py prints some i18n status text containing non-Latin
-        # characters (e.g. "【...】"-style brackets); without this, the child's stdout
-        # defaults to the Windows console's codepage (cp1252 here), and printing one of
-        # those characters crashes it with UnicodeEncodeError mid-run -- hit this for
-        # real, right after the model had already loaded and inference had started.
-        child_env = os.environ.copy()
-        child_env["PYTHONUTF8"] = "1"
-        result = subprocess.run([
-            _venv_python(), "-m", "infer.cli",
-            "--model", pth_path,
-            "--index", index_path,
-            "--input", in_path,
-            "--output", out_path,
-            "--pitch", str(pitch),
-            "--f0-method", F0_METHOD,
-            "--index-rate", str(index_rate),
-            "--protect", str(PROTECT),
-            "--overwrite",
-        ], cwd=RVC_REPO_DIR, capture_output=True, timeout=CONVERT_TIMEOUT_SEC, env=child_env,
-           # encoding=utf-8 (not text=True, which decodes with the locale default --
-           # cp1252 here) so *this* side decodes the child's output consistently with
-           # PYTHONUTF8=1 above. Without this, a background reader thread inside
-           # subprocess.run() hit a UnicodeDecodeError of its own trying to decode the
-           # same non-Latin bytes as cp1252 -- didn't break this particular run (the
-           # audio file was already fully written by the time it happened) but printed
-           # a scary, misleading traceback and could lose the tail of stderr on a run
-           # where the timing worked out worse.
-           encoding="utf-8", errors="replace")
-        if result.returncode != 0:
-            detail = (result.stdout[-800:] + "\n" + result.stderr[-800:]).strip()
-            logger.error(f"[RVC-local] convert failed for {speaker_id} on {device()}:\n{detail}")
-            return None
-        with open(out_path, "rb") as f:
-            return f.read()
+        with _convert_lock:
+            # PYTHONUTF8=1: infer/cli.py prints some i18n status text containing non-Latin
+            # characters (e.g. "【...】"-style brackets); without this, the child's stdout
+            # defaults to the Windows console's codepage (cp1252 here), and printing one of
+            # those characters crashes it with UnicodeEncodeError mid-run -- hit this for
+            # real, right after the model had already loaded and inference had started.
+            child_env = os.environ.copy()
+            child_env["PYTHONUTF8"] = "1"
+            result = subprocess.run([
+                _venv_python(), "-m", "infer.cli",
+                "--model", pth_path,
+                "--index", index_path,
+                "--input", in_path,
+                "--output", out_path,
+                "--pitch", str(pitch),
+                "--f0-method", F0_METHOD,
+                "--index-rate", str(index_rate),
+                "--protect", str(PROTECT),
+                "--overwrite",
+            ], cwd=RVC_REPO_DIR, capture_output=True, timeout=CONVERT_TIMEOUT_SEC, env=child_env,
+               # encoding=utf-8 (not text=True, which decodes with the locale default --
+               # cp1252 here) so *this* side decodes the child's output consistently with
+               # PYTHONUTF8=1 above. Without this, a background reader thread inside
+               # subprocess.run() hit a UnicodeDecodeError of its own trying to decode the
+               # same non-Latin bytes as cp1252 -- didn't break this particular run (the
+               # audio file was already fully written by the time it happened) but printed
+               # a scary, misleading traceback and could lose the tail of stderr on a run
+               # where the timing worked out worse.
+               encoding="utf-8", errors="replace")
+            if result.returncode != 0:
+                detail = (result.stdout[-800:] + "\n" + result.stderr[-800:]).strip()
+                logger.error(f"[RVC-local] convert failed for {speaker_id} on {device()}:\n{detail}")
+                return None
+            with open(out_path, "rb") as f:
+                return f.read()
     except subprocess.TimeoutExpired:
         logger.error(f"[RVC-local] convert timed out for {speaker_id} after {CONVERT_TIMEOUT_SEC}s")
         return None
