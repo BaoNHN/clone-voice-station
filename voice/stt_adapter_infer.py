@@ -37,6 +37,7 @@ if os.path.isfile(os.path.join(_BUNDLED_FFMPEG_DIR, "ffmpeg.exe")):
 # Mirrors voice/stt_local_train.py's own _HF_MODEL_BY_NAME/GENERATE_KWARGS --
 # an adapter must be loaded and decoded the same way it was trained/gated.
 _HF_MODEL_BY_NAME = {
+    "phowhisper-small": "vinai/PhoWhisper-small",
     "whisper-tiny": "openai/whisper-tiny",
     "whisper-base": "openai/whisper-base",
 }

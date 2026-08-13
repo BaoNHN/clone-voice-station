@@ -60,7 +60,16 @@ MIN_STT_TRAIN_SAMPLES = 10
 MAX_STT_TRAIN_SAMPLES = 500
 MAX_STT_SAMPLE_DURATION_SEC = 30
 MAX_STT_ADAPTERS_PER_GUEST = 3
-ALLOWED_STT_BASE_MODELS = ("whisper-tiny", "whisper-base")
+# First entry is the default (app.py falls back to ALLOWED_STT_BASE_MODELS[0] when a
+# caller doesn't specify base_model). phowhisper-small (vinai/PhoWhisper-small, ~244M
+# params) is Vietnamese-tuned unlike the generic whisper-tiny/whisper-base -- promoted to
+# default 2026-08-13 to match voice/stt.py's local inference fallback also switching to
+# PhoWhisper. Meaningfully bigger than tiny/base though: local (this-machine) training's
+# ~4GB VRAM budget (see voice/stt_local_train.py) is tighter for this one than for
+# tiny/base -- failure mode is a clean CUDA OOM that fails the training job (existing
+# error handling), not a corrupted adapter, so it's safe to offer, just more likely to
+# need the Colab backend instead of Local on constrained hardware.
+ALLOWED_STT_BASE_MODELS = ("phowhisper-small", "whisper-tiny", "whisper-base")
 
 # First client seeded on a fresh DB — matches the app this service was extracted from
 # (D:\hoc\project\rag-legal-assistant). Named to match the lowercase-hyphen convention

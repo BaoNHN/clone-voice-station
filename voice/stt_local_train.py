@@ -11,9 +11,14 @@ transformers.Trainer, keeps this dependency-light (no accelerate/Trainer
 config surface) and gives a clean per-step hook for progress_cb, same
 convention as voice/rvc_local.py's training function.
 
-Restricted to whisper-tiny/whisper-base (see database.ALLOWED_STT_BASE_MODELS)
--- this machine's GPU has ~4GB VRAM and this is a public, no-API-key-gated
-page, so batch_size stays at 1 and there's no attempt at anything heavier.
+base_model must be one of database.ALLOWED_STT_BASE_MODELS (phowhisper-small/
+whisper-tiny/whisper-base) -- this machine's GPU has ~4GB VRAM and this is a
+public, no-API-key-gated page, so batch_size stays at 1 and there's no
+attempt at anything heavier. phowhisper-small (~244M params) is noticeably
+bigger than tiny/base and the tightest fit of the three for local training
+specifically; a guest whose local run OOMs on this hardware can switch to
+the Colab backend instead (see engine/stt_train_engine.py's backend param) --
+Colab's GPU has much more headroom.
 
 Everything heavy (torch, transformers, peft, librosa) is imported lazily
 inside train(), same pattern as voice/stt.py's Whisper load.
@@ -117,6 +122,7 @@ from engine.server_log import get_logger
 logger = get_logger()
 
 _HF_MODEL_BY_NAME = {
+    "phowhisper-small": "vinai/PhoWhisper-small",
     "whisper-tiny": "openai/whisper-tiny",
     "whisper-base": "openai/whisper-base",
 }
@@ -317,7 +323,8 @@ def train(adapter_id: int, samples: list, base_model: str, output_dir: str,
     samples          : list  [{"audio_path": str, "reference_text": str}, ...] -- the
                               trainable pool (early-stop split carved from this; also the
                               final-gate split too, when holdout_samples is None).
-    base_model       : str   One of database.ALLOWED_STT_BASE_MODELS ("whisper-tiny"/"whisper-base").
+    base_model       : str   One of database.ALLOWED_STT_BASE_MODELS
+                              ("phowhisper-small"/"whisper-tiny"/"whisper-base").
     output_dir       : str   Where to save the trained adapter (created if missing).
     resume_from_path : str   Directory of a previously-saved adapter (adapter_model.safetensors +
                               adapter_config.json) to continue training from, or None to start fresh.
