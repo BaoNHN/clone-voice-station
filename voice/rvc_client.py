@@ -34,7 +34,18 @@ from database.database import get_setting
 # after that, whatever's stored in `settings` (editable via the manager
 # dashboard) always wins. See get_pitch()/get_index_rate()/get_timeout().
 _DEFAULTS = {
-    "rvc_timeout_convert":    os.getenv("RVC_TIMEOUT_CONVERT", "20"),     # seconds
+    # 20s was tuned for a fast Colab T4 response and is far too short once
+    # `rvc_endpoint` points at local_rvc_server.py instead (see its own docstring
+    # and voice/rvc_local.py's CONVERT_TIMEOUT_SEC comment): its first call per
+    # speaker legitimately reloads the model from disk (measured 101s cold, 0.8s
+    # warm after). At 20s, that cold call always looked like "endpoint
+    # unreachable" and fell through to the even-slower raw subprocess fallback,
+    # which then *also* timed out -- confirmed for real via repeated "[RVC]
+    # Endpoint unreachable ... Read timed out (read timeout=20)" log lines.
+    # 150s matches CONVERT_TIMEOUT_SEC's own margin and is harmless for genuine
+    # Colab use too (only makes a slow-but-working Colab response less likely to
+    # be abandoned early, never a regression).
+    "rvc_timeout_convert":    os.getenv("RVC_TIMEOUT_CONVERT", "150"),    # seconds
     "rvc_timeout_short":      os.getenv("RVC_TIMEOUT_SHORT", "5"),        # health/status checks
     "rvc_timeout_download":   os.getenv("RVC_TIMEOUT_DOWNLOAD", "180"),   # trained model can be 50-150MB
     "rvc_timeout_f5tts":      os.getenv("RVC_TIMEOUT_F5TTS", "30"),       # F5-TTS is slower than RVC convert
