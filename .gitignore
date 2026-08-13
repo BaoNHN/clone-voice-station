@@ -11,5 +11,9 @@ __pycache__/
 /bin/
 /local_rvc/
 /server.log*
+/station.out.log
+/station.err.log
+/local_rvc_worker.out.log
+/local_rvc_worker.err.log
 /stt_general_benchmark/
 /tools/medical_eval_set/
