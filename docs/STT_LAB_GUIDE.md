@@ -40,6 +40,10 @@ Job cục bộ đi qua **hàng đợi 1-job-tại-1-thời-điểm** (`engine/st
 
 Tải về `.stt-pack.zip` (khi đã train xong) chứa thêm `adapter_model.safetensors` + `adapter_config.json` — dùng được thật qua `clone_voice_client.local_stt`.
 
+### Publish — chỉ khách tự làm, cho đúng client của họ
+
+Khi adapter Tier 2 đã `status='ready'` (có `adapter_path`), khách bấm **"Publish"** trên chính adapter đó để nó thành model production cho `/api/transcribe` — **luôn luôn** publish cho client tự động được cấp riêng cho khách đó lúc đăng ký (`stt-guest-{username}`), không bao giờ cho một client khác. Đây là cách **duy nhất** để publish một adapter cho một client cụ thể — manager **không có** UI hay API để tự chọn client rồi publish thay khách. Phía manager (`/manager/stt`) chỉ có 2 việc: **Unpublish** (thu hồi, vd để kiểm duyệt) một adapter bất kỳ đã publish, và **Đặt làm mặc định** (`set-default`) — chỉ định một adapter làm fallback hệ thống cho *mọi* client chưa tự publish gì, không gắn với client cụ thể nào. Adapter Tier 1 (chỉ hotword, không có `adapter_path`) **không publish được** qua cơ chế này — dùng qua "Tải xuống" rồi chạy `clone_voice_client.local_stt` trong host app, như mục 5/6 dưới đây.
+
 ### Train tiếp từ pack cũ
 
 Khách có thể upload lại `.stt-pack.zip` đã tải trước đó (`POST /api/stt/adapters/{id}/continue`) để train tiếp từ đúng weight cũ thay vì train lại từ đầu — vì data thô ban đầu đã bị xoá theo cam kết privacy, chỉ weight nhỏ được giữ lại.
@@ -86,7 +90,7 @@ python app.py                        # http://127.0.0.1:8091
 
 Chat dùng retrieval TF-IDF thật trên bộ dữ liệu công khai `MrCookieDev/Vietnamese-Chatting-Dataset` (không phải câu trả lời cứng). Nút mic ghi âm → `POST /transcribe` → Whisper chạy ngay trong process của app này (không gọi `clone-voice-station` qua mạng).
 
-Muốn thấy hotword/LoRA áp dụng thật: chạy `clone-voice-station`, vào `/stt-lab`, tạo adapter, tải `.stt-pack.zip`, thả vào `voice-lab-example/stt_pack/`, khởi động lại.
+Muốn thấy hotword/LoRA áp dụng thật: chạy `clone-voice-station`, vào `/stt-lab`, tạo adapter, tải `.stt-pack.zip`, rồi vào `voice-lab-example`'s `/settings` → mục "Local Whisper pack" → tải file lên và chọn làm active — áp dụng ngay cho lần ghi âm tiếp theo, không cần khởi động lại app. Có thể tải lên nhiều pack và đổi qua lại.
 
 ## 7. API tham khảo nhanh (`clone-voice-station`)
 
@@ -110,7 +114,17 @@ DELETE /api/stt/adapters/{id}/samples/{sid}    xoá 1 mẫu
 POST   /api/stt/adapters/{id}/train      {"backend": "auto"|"colab"|"local"}
 POST   /api/stt/adapters/{id}/continue   upload pack cũ để train tiếp
 
+POST   /api/stt/adapters/{id}/publish    publish cho client tự động của chính khách (Tier 2 ready only)
+POST   /api/stt/adapters/{id}/unpublish  khách tự bỏ publish adapter của mình
+
 DELETE /api/stt/account               xoá toàn bộ tài khoản + dữ liệu
+```
+
+Phía manager (`/manager/stt`, cần đăng nhập manager) chỉ có 2 hành động ghi liên quan publish — không có route nào cho manager tự chọn client để publish:
+
+```
+POST   /manager/stt/adapters/{id}/unpublish      thu hồi publish (không cần chọn client)
+POST   /manager/stt/adapters/{id}/set-default    đặt/POST .../unset-default để bỏ mặc định hệ thống
 ```
 
 ## 9. Luồng RVC voice cloning (`rag-legal-assistant`)

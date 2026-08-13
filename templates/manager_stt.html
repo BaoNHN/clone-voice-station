@@ -153,17 +153,14 @@
   }
   .actions-row { display: flex; gap: 8px; margin-top: 10px; }
 
-  /* ── Publish-to-client controls: reused both inside an owned adapter's card
-     and, compactly, in the global "every adapter" table below -- publishing
-     doesn't require having authored the adapter (a manager can publish a
-     guest-trained one too), so this lives independent of the card UI. ── */
+  /* ── Publish status + default controls: reused both inside an owned
+     adapter's card and, compactly, in the global "every adapter" table
+     below. Publishing itself is guest self-serve only (STT Lab) -- a
+     manager only sees the resulting state here and can revoke it or set
+     system-wide default, never pick a client to publish onto. ── */
   .publish-badge {
     font-size: 15px; padding: 3px 10px; border-radius: 999px;
     background: rgba(108,140,255,0.15); color: #9db2ff;
-  }
-  select.client-select {
-    padding: 7px 10px; border-radius: 7px; font-size: 15px; min-width: 160px;
-    background: #14141b; border: 1.5px solid rgba(255,255,255,0.12); color: #e8e8ec;
   }
 </style>
 </head>
@@ -209,7 +206,7 @@
 <!-- ══ Manager's own adapters (full editor, same as STT Lab) ══ -->
 <div class="card">
   <h2>📦 Adapter do bạn tạo</h2>
-  <p class="desc">Chỉnh từ khoá, mẫu huấn luyện, huấn luyện lại và publish thành model production cho một client — publish áp dụng cho mọi client gọi <span class="mono" style="font-family:'SF Mono',Consolas,monospace;">/api/transcribe</span>.</p>
+  <p class="desc">Chỉnh từ khoá, mẫu huấn luyện, huấn luyện lại. Publish cho một client cụ thể là việc khách tự làm ở STT Lab (self-serve) — ở đây bạn chỉ xem trạng thái, có thể thu hồi (unpublish) nếu cần, hoặc đặt một adapter làm mặc định hệ thống cho mọi client chưa tự publish gì.</p>
   <div id="ownAdaptersEmpty" class="empty" style="display:none;">Chưa có adapter nào do manager tạo — tạo một cái ở trên.</div>
   <div id="ownAdaptersList"></div>
 </div>
@@ -217,11 +214,11 @@
 <!-- ══ Global table: every adapter, any owner ══ -->
 <div class="card">
   <h2>🗂️ Toàn bộ STT adapter (mọi client)</h2>
-  <p class="desc">Mọi adapter Tier 2 đã tạo — của khách (STT Lab) lẫn của manager. Publish/unpublish trực tiếp từ đây, kể cả adapter do khách tự huấn luyện. "Đặt làm mặc định" gán một adapter làm fallback cho toàn hệ thống, không cần chọn client. Thứ tự ưu tiên cho mỗi yêu cầu /api/transcribe: adapter publish riêng cho client đó → adapter mặc định hệ thống (nếu có) → PhoWhisper trên Colab (nếu đã kết nối) → Whisper chạy local trên CPU của máy chủ.</p>
+  <p class="desc">Mọi adapter Tier 2 đã tạo — của khách (STT Lab) lẫn của manager. Publish cho một client cụ thể là khách tự làm ở STT Lab (self-serve); ở đây chỉ xem trạng thái publish và có thể thu hồi (unpublish) nếu cần. "Đặt làm mặc định" gán một adapter làm fallback cho toàn hệ thống, không cần chọn client. Thứ tự ưu tiên cho mỗi yêu cầu /api/transcribe: adapter publish riêng cho client đó → adapter mặc định hệ thống (nếu có) → PhoWhisper trên Colab (nếu đã kết nối) → Whisper chạy local trên CPU của máy chủ.</p>
   <div style="overflow-x:auto;">
     <table>
       <thead>
-        <tr><th>ID</th><th>Tên</th><th>Base model</th><th>Trạng thái</th><th>Người tạo</th><th>Publish cho client</th><th></th></tr>
+        <tr><th>ID</th><th>Tên</th><th>Base model</th><th>Trạng thái</th><th>Người tạo</th><th>Đang publish cho</th><th></th></tr>
       </thead>
       <tbody id="globalAdaptersBody"></tbody>
     </table>
@@ -238,7 +235,6 @@ const MIN_STT_TRAIN_SAMPLES = {{ min_stt_train_samples }};
 const CSRF_TOKEN = "{{ csrf_token }}";
 
 let pollTimer = null;
-let CLIENTS = [];
 
 function toast(msg, kind) {
   const t = document.getElementById('toast');
@@ -269,15 +265,7 @@ function escapeHtml(s) {
 
 const STATUS_LABEL = { ready: 'Sẵn sàng', training: 'Đang huấn luyện', failed: 'Lỗi' };
 
-function clientOptionsHTML(selectedId) {
-  if (!CLIENTS.length) return '<option value="">— chưa có client nào —</option>';
-  return CLIENTS.map(c => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
-}
-
-// Publish block shared by both the owned-adapter card and the global table --
-// only ready+trained adapters (adapter_path set) can be published, matching
-// the server-side check in POST /manager/stt/adapters/{id}/publish.
-// Default block: independent of per-client publish above -- a manager can set
+// Default block: independent of per-client publish below -- a manager can set
 // this adapter as the system-wide fallback for ANY client with nothing of its
 // own published, with no client_id involved at all (POST .../set-default).
 function defaultBlockHTML(a) {
@@ -292,8 +280,13 @@ function defaultBlockHTML(a) {
   return `<button class="btn ghost" data-action="set-default" data-id="${a.id}">Đặt làm mặc định</button>`;
 }
 
+// Publish block shared by both the owned-adapter card and the global table --
+// READ-ONLY status display, not an editable action: publishing to a specific
+// client is guest self-serve only (STT Lab's own "Publish" button, backed by
+// their auto-provisioned client -- see /api/stt/adapters/{id}/publish). A
+// manager never picks a client here; the only write action left is
+// Unpublish (revoke), plus the client-independent Default toggle below.
 function publishBlockHTML(a, compact) {
-  const canPublish = a.status === 'ready' && a.adapter_path;
   const defaultHTML = defaultBlockHTML(a);
   if (a.is_published) {
     return `
@@ -302,12 +295,8 @@ function publishBlockHTML(a, compact) {
       ${defaultHTML}
     `;
   }
-  if (!canPublish) {
-    return `<span class="tag">Chỉ publish được khi adapter đã huấn luyện xong (Sẵn sàng)</span>`;
-  }
   return `
-    <select class="client-select" data-id="${a.id}">${clientOptionsHTML(null)}</select>
-    <button class="btn" data-action="publish" data-id="${a.id}">Publish</button>
+    <span class="tag">Chưa publish cho client nào</span>
     ${defaultHTML}
   `;
 }
@@ -359,7 +348,7 @@ function adapterCardHTML(a) {
         <button class="btn ghost" data-action="continue" ${dis}>Train tiếp từ pack cũ</button>
       </div>
 
-      <div class="section-label">Publish cho client (production /api/transcribe)</div>
+      <div class="section-label">Trạng thái publish (production /api/transcribe) — khách tự publish ở STT Lab</div>
       <div class="publish-row" data-publish-for="${a.id}">${publishBlockHTML(a)}</div>
 
       <div class="actions-row">
@@ -372,12 +361,6 @@ function adapterCardHTML(a) {
 
 let _wasTraining = false;
 let _lastAdapters = [];
-
-async function loadClients() {
-  try {
-    CLIENTS = await api('/manager/clients');
-  } catch (e) { /* publish dropdowns just show empty -- table/cards still usable */ }
-}
 
 async function loadAdapters() {
   try {
@@ -554,18 +537,6 @@ document.getElementById('ownAdaptersList').addEventListener('input', (e) => {
   }
 });
 
-async function publishAdapter(adapterId, clientId) {
-  if (!clientId) { toast('Chọn client trước khi publish.', 'error'); return; }
-  try {
-    await api(`/manager/stt/adapters/${adapterId}/publish`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: Number(clientId) }),
-    });
-    toast('Đã publish adapter cho client.');
-    loadAdapters();
-  } catch (e) { toast(e.message, 'error'); }
-}
-
 async function unpublishAdapter(adapterId) {
   try {
     await api(`/manager/stt/adapters/${adapterId}/unpublish`, { method: 'POST' });
@@ -591,13 +562,6 @@ async function unsetDefaultAdapter(adapterId) {
 }
 
 function handleGlobalOrCardClick(e) {
-  const pubBtn = e.target.closest('button[data-action="publish"]');
-  if (pubBtn) {
-    const id = Number(pubBtn.dataset.id);
-    const select = pubBtn.closest('.publish-row').querySelector('.client-select');
-    publishAdapter(id, select ? select.value : null);
-    return true;
-  }
   const unpubBtn = e.target.closest('button[data-action="unpublish"]');
   if (unpubBtn) {
     unpublishAdapter(Number(unpubBtn.dataset.id));
@@ -768,7 +732,7 @@ async function deleteAdapter(id, name) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-loadClients().then(loadAdapters);
+loadAdapters();
 </script>
 </body>
 </html>

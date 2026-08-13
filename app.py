@@ -789,8 +789,8 @@ async def transcribe_route(
     gets back plain text to feed into its own assistant as a normal text
     query; this service never sees or needs to know what that query means.
 
-    If a manager has published a Tier 2 STT adapter for this client (see
-    /manager/stt/adapters/{id}/publish), tries that fine-tuned model first.
+    If a Tier 2 STT adapter has been published for this client (self-serve,
+    see /api/stt/adapters/{id}/publish), tries that fine-tuned model first.
     Otherwise, tries the manager's system-wide default adapter if one is set
     (see /manager/stt/adapters/{id}/set-default) -- a manager-owned adapter
     that isn't tied to any single client_id. Otherwise -- or if either adapter
@@ -1191,10 +1191,13 @@ async def download_stt_adapter_route(adapter_id: int, guest_id: int = Depends(re
 async def publish_stt_adapter_route(adapter_id: int, guest_id: int = Depends(require_stt_guest)):
     """Self-serve publish (added 2026-08-12): a guest activates their own ready adapter
     for their own auto-provisioned client's /api/transcribe traffic immediately, no
-    manager step in between -- see _provision_stt_guest_client (database.py). Unlike
-    the manager route (POST /manager/stt/adapters/{id}/publish), client_id is never
-    taken from the request -- it's always the guest's own, read fresh from the DB
-    (not the session) so a manager fix-up is honored right away."""
+    manager step in between -- see _provision_stt_guest_client (database.py). This is
+    the ONLY way to publish an adapter to a specific client -- there is deliberately no
+    manager-side equivalent that picks an arbitrary client_id, so client_id is never
+    taken from the request here either -- it's always the guest's own, read fresh from
+    the DB (not the session) so a manager fix-up (see database.py) is honored right
+    away. A manager can only revoke (POST /manager/stt/adapters/{id}/unpublish) or set
+    a client-independent system default (.../set-default)."""
     adapter = _get_owned_stt_adapter(adapter_id, guest_id)
     if adapter["status"] != "ready" or not adapter["adapter_path"]:
         raise HTTPException(status_code=400,
@@ -1468,24 +1471,12 @@ async def manager_download_stt_adapter_route(adapter_id: int, manager: str = Dep
     )
 
 
-@app.post("/manager/stt/adapters/{adapter_id}/publish")
-async def manager_publish_stt_adapter_route(adapter_id: int, request: Request, manager: str = Depends(require_manager)):
-    adapter = _get_stt_adapter_or_404(adapter_id)
-    if adapter["status"] != "ready" or not adapter["adapter_path"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Chỉ có thể publish adapter đã huấn luyện xong (status='ready', có adapter_path).",
-        )
-    data = await request.json()
-    client_id = data.get("client_id")
-    if not client_id or not get_client(client_id):
-        raise HTTPException(status_code=400, detail="client_id không hợp lệ.")
-    publish_stt_adapter(adapter_id, client_id)
-    return {"status": "ok"}
-
-
 @app.post("/manager/stt/adapters/{adapter_id}/unpublish")
 async def manager_unpublish_stt_adapter_route(adapter_id: int, manager: str = Depends(require_manager)):
+    """Revoke only -- a manager can un-publish (e.g. for moderation) but can't
+    publish to an arbitrary client themselves; publishing is guest self-serve
+    only, always onto the guest's own auto-provisioned client (see
+    POST /api/stt/adapters/{id}/publish)."""
     _get_stt_adapter_or_404(adapter_id)
     unpublish_stt_adapter(adapter_id)
     return {"status": "ok"}

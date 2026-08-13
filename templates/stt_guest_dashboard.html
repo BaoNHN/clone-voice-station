@@ -315,9 +315,10 @@ function adapterCardHTML(a) {
       </div>
 
       <div class="actions-row">
-        ${status === 'ready' ? (a.is_published
+        ${status === 'ready' && a.adapter_path ? (a.is_published
           ? `<button class="btn ghost" data-action="unpublish">Bỏ publish</button>`
-          : `<button class="btn" data-action="publish">Publish</button>`) : ''}
+          : `<button class="btn" data-action="publish">Publish cho client của tôi</button>`)
+          : (status === 'ready' ? `<span class="tag">Chỉ adapter Tier 2 (đã huấn luyện) mới publish được — Tier 1 (chỉ từ khoá) dùng qua "Tải xuống" rồi chạy local, không qua publish</span>` : '')}
         <button class="btn ghost" data-action="download">Tải xuống</button>
         <button class="btn danger" data-action="delete">Xoá adapter</button>
       </div>
