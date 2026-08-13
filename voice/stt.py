@@ -38,6 +38,7 @@ clone_voice_client.local_stt's transcribe_with_lora().
 
 import os
 import tempfile
+import threading
 
 from engine.server_log import get_logger
 
@@ -60,6 +61,7 @@ _GENERATE_KWARGS = {"no_repeat_ngram_size": 3, "repetition_penalty": 1.3, "num_b
 _model = None
 _processor = None
 _device = None
+_model_lock = threading.Lock()
 
 _SUFFIX_BY_MIME = {
     "webm": ".webm",
@@ -75,18 +77,24 @@ _SUFFIX_BY_MIME = {
 def _load_model():
     global _model, _processor, _device
     if _model is None:
-        import torch
-        from transformers import WhisperForConditionalGeneration, WhisperProcessor
+        # transcribe() runs off the request thread via asyncio.to_thread, so
+        # overlapping requests (e.g. live-transcribe's 1s local cadence hitting
+        # a cold start) can race this check concurrently -- lock + re-check
+        # so only the first one actually loads the checkpoint.
+        with _model_lock:
+            if _model is None:
+                import torch
+                from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
-        _device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info(f"[STT] Loading {_MODEL_NAME} ({_device}) …")
-        _processor = WhisperProcessor.from_pretrained(_MODEL_NAME, language="vietnamese", task="transcribe")
-        _model = WhisperForConditionalGeneration.from_pretrained(_MODEL_NAME)
-        _model.generation_config.language = "vietnamese"
-        _model.generation_config.task = "transcribe"
-        _model.to(_device)
-        _model.eval()
-        logger.info("[STT] PhoWhisper ready.")
+                _device = "cuda" if torch.cuda.is_available() else "cpu"
+                logger.info(f"[STT] Loading {_MODEL_NAME} ({_device}) …")
+                _processor = WhisperProcessor.from_pretrained(_MODEL_NAME, language="vietnamese", task="transcribe")
+                _model = WhisperForConditionalGeneration.from_pretrained(_MODEL_NAME)
+                _model.generation_config.language = "vietnamese"
+                _model.generation_config.task = "transcribe"
+                _model.to(_device)
+                _model.eval()
+                logger.info("[STT] PhoWhisper ready.")
     return _model, _processor, _device
 
 
