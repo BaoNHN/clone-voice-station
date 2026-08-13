@@ -3,8 +3,9 @@
 tools/test_stt.py
 Quick smoke test for clone-voice-station's Speech-to-Text path (POST /api/transcribe).
 Sends one audio file, prints the transcribed text, which engine actually served it
-(phowhisper:<model> via Colab, or whisper-local:<model> fallback -- see the "engine"
-field added in voice/stt.py and colab/voice_server.ipynb's /transcribe route), and
+(phowhisper:<model> via Colab, stt-adapter:<id>:<model> for a published/default Tier 2
+adapter, or phowhisper-local:<model> for the local PhoWhisper-small fallback -- see the
+"engine" field added in voice/stt.py and colab/voice_server.ipynb's /transcribe route), and
 round-trip latency. Useful to confirm the whole path works before a demo, without
 going through the browser mic UI.
 

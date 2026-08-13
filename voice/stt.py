@@ -1,17 +1,39 @@
 """
 voice/stt.py
-Speech-to-Text using OpenAI Whisper — the input half of this service's voice
-loop (the output half is voice/tts.py + voice/rvc_client.py). A client app
-posts recorded microphone audio to POST /api/transcribe (see app.py) and gets
-back plain text to feed into its own assistant as a normal text query — this
-module never touches the client's RAG/LLM pipeline.
+Speech-to-Text using PhoWhisper (VinAI's Vietnamese fine-tune of Whisper) —
+the input half of this service's voice loop (the output half is voice/tts.py
++ voice/rvc_client.py). A client app posts recorded microphone audio to
+POST /api/transcribe (see app.py) and gets back plain text to feed into its
+own assistant as a normal text query — this module never touches the
+client's RAG/LLM pipeline.
 
-Whisper pulls in torch, already a dependency via resemblyzer (see
-engine/realism_engine.py) — the model itself is loaded lazily on first use
-rather than at app.py startup, so a deployment that never calls
-/api/transcribe pays no import/load cost. Decoding non-.wav audio (webm/ogg/
-m4a/mp3, the formats a browser's MediaRecorder produces) requires an `ffmpeg`
-binary on PATH, same requirement already documented for realism_engine.
+This is the LAST-RESORT fallback in /api/transcribe's chain (published/
+default Tier 2 adapter -> Colab-hosted PhoWhisper-large -> here), reached
+only when both of those are unavailable -- so it deliberately uses the
+*small* PhoWhisper checkpoint, not -large: it has to run acceptably on this
+host's CPU with no GPU guaranteed, and small is meaningfully lighter while
+still being the same Vietnamese-tuned family as the Colab primary path,
+instead of generic multilingual openai-whisper (used here until this was
+changed) which measurably underperforms PhoWhisper on Vietnamese speech (see
+thesis pilot results: PhoWhisper-large 11.7% WER vs local Whisper-small
+21.2% WER on identical audio) -- every fallback step should still be
+Vietnamese-tuned, just progressively smaller/faster.
+
+Loaded via transformers (WhisperForConditionalGeneration + WhisperProcessor),
+not the openai-whisper package -- same HF model class stt_adapter_infer.py
+already uses for Tier 2 LoRA inference, so this shares that decoding
+approach (beam search + anti-repetition kwargs) instead of introducing a
+second, differently-behaved Whisper stack. transformers/torch are already
+hard dependencies (Tier 2 adapters, resemblyzer). Decoding non-.wav audio
+(webm/ogg/m4a/mp3, the formats a browser's MediaRecorder produces) goes
+through librosa, same as stt_adapter_infer.py -- no ffmpeg subprocess shell-
+out here, sidestepping the conda-forge ffmpeg DLL crash entirely rather than
+working around it.
+
+Only Vietnamese is supported (PhoWhisper is Vietnamese-only) -- the
+`language` parameter is accepted for interface parity with the other
+transcribe() implementations this can be swapped with, but ignored, same as
+clone_voice_client.local_stt's transcribe_with_lora().
 """
 
 import os
@@ -21,17 +43,23 @@ from engine.server_log import get_logger
 
 logger = get_logger()
 
-# Bundled static ffmpeg (see bin/, gitignored) — prefer this over whatever's on
-# PATH. The conda-forge ffmpeg package in rag_env fails to launch on this
-# machine (STATUS_ENTRYPOINT_NOT_FOUND, a DLL conflict with its dynamically-
-# linked build); this static build sidesteps that. Falls back to PATH's
-# ffmpeg if the bundled binary isn't present (e.g. a different deployment).
+# Bundled static ffmpeg (see bin/, gitignored) -- librosa's audioread
+# fallback still shells out to ffmpeg for non-.wav browser recordings
+# (webm/ogg/m4a/mp3), same as stt_adapter_infer.py's own copy of this block.
+# The conda-forge ffmpeg package in rag_env fails to launch on this machine
+# (STATUS_ENTRYPOINT_NOT_FOUND, a DLL conflict with its dynamically-linked
+# build); this static build sidesteps that. Falls back to PATH's ffmpeg if
+# the bundled binary isn't present (e.g. a different deployment).
 _BUNDLED_FFMPEG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin")
 if os.path.isfile(os.path.join(_BUNDLED_FFMPEG_DIR, "ffmpeg.exe")):
     os.environ["PATH"] = _BUNDLED_FFMPEG_DIR + os.pathsep + os.environ.get("PATH", "")
 
+_MODEL_NAME = os.getenv("PHOWHISPER_LOCAL_MODEL", "vinai/PhoWhisper-small")
+_GENERATE_KWARGS = {"no_repeat_ngram_size": 3, "repetition_penalty": 1.3, "num_beams": 5}
+
 _model = None
-_MODEL_SIZE = os.getenv("WHISPER_MODEL", "small")  # tiny | base | small | medium
+_processor = None
+_device = None
 
 _SUFFIX_BY_MIME = {
     "webm": ".webm",
@@ -45,13 +73,21 @@ _SUFFIX_BY_MIME = {
 
 
 def _load_model():
-    global _model
+    global _model, _processor, _device
     if _model is None:
-        import whisper
-        logger.info(f"[STT] Loading Whisper-{_MODEL_SIZE} …")
-        _model = whisper.load_model(_MODEL_SIZE)
-        logger.info("[STT] Whisper ready.")
-    return _model
+        import torch
+        from transformers import WhisperForConditionalGeneration, WhisperProcessor
+
+        _device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"[STT] Loading {_MODEL_NAME} ({_device}) …")
+        _processor = WhisperProcessor.from_pretrained(_MODEL_NAME, language="vietnamese", task="transcribe")
+        _model = WhisperForConditionalGeneration.from_pretrained(_MODEL_NAME)
+        _model.generation_config.language = "vietnamese"
+        _model.generation_config.task = "transcribe"
+        _model.to(_device)
+        _model.eval()
+        logger.info("[STT] PhoWhisper ready.")
+    return _model, _processor, _device
 
 
 def _suffix_for(mime: str) -> str:
@@ -67,37 +103,37 @@ def transcribe(audio_bytes: bytes, mime: str = "audio/webm", language: str = Non
     Parameters
     ----------
     audio_bytes : bytes  Raw audio, typically from a browser MediaRecorder.
-    mime        : str    MIME type hint, used only to pick a temp-file suffix —
-                          Whisper shells out to ffmpeg, which sniffs the actual
-                          format from file contents.
-    language    : str    ISO 639-1 code (e.g. "vi") to force a language, or
-                          None to let Whisper auto-detect.
+    mime        : str    MIME type hint, used only to pick a temp-file suffix.
+    language    : str    Accepted for interface parity with other transcribe()
+                          implementations; ignored (PhoWhisper is Vietnamese-only).
 
     Returns
     -------
-    dict {"text": str, "language": str, "segments": [{"start", "end", "text"}, ...]}
+    dict {"text": str, "language": "vi", "segments": [], "engine": str}
     """
-    model = _load_model()
+    import librosa
+    import torch
+
+    model, processor, device = _load_model()
 
     with tempfile.NamedTemporaryFile(suffix=_suffix_for(mime), delete=False) as f:
         f.write(audio_bytes)
         tmp_path = f.name
-
     try:
-        result = model.transcribe(
-            tmp_path,
-            language=language or None,
-            task="transcribe",
-            fp16=False,  # CPU-safe; harmless no-op on CUDA where fp16 is autodetected anyway
-        )
-        return {
-            "text":     result["text"].strip(),
-            "language": result.get("language", "unknown"),
-            "segments": [
-                {"start": s["start"], "end": s["end"], "text": s["text"].strip()}
-                for s in result.get("segments", [])
-            ],
-            "engine": f"whisper-local:{_MODEL_SIZE}",
-        }
+        audio, _ = librosa.load(tmp_path, sr=16000, mono=True)
     finally:
         os.unlink(tmp_path)
+
+    input_features = processor.feature_extractor(
+        audio, sampling_rate=16000, return_tensors="pt"
+    ).input_features.to(device)
+    with torch.no_grad():
+        predicted_ids = model.generate(input_features, **_GENERATE_KWARGS)
+    text = processor.tokenizer.batch_decode(predicted_ids, skip_special_tokens=True)[0].strip()
+
+    return {
+        "text": text,
+        "language": "vi",
+        "segments": [],
+        "engine": f"phowhisper-local:{_MODEL_NAME}",
+    }
