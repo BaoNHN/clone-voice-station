@@ -24,20 +24,19 @@ activate đúng conda env trước (như start_all.bat bên rag-legal-assistant
     python app.py
 
 --------------------------------------------------------------------------
-2. LOCAL RVC WORKER (cache model RAM, tuỳ chọn nhưng nên bật)
+2. RVC LOCAL FALLBACK (tự động, không cần chạy gì thêm)
 --------------------------------------------------------------------------
-Chạy riêng, venv riêng (không dùng chung với env của app.py chính):
+Khi "Kết nối RVC (Colab)" (mục 5) chưa cấu hình hoặc không kết nối được,
+voice/rvc_local.py tự chạy conversion ngay trong tiến trình app.py (cùng
+port 8090) — không còn cần chạy một server/port riêng nữa (local_rvc_server.py
+cũ đã bỏ). Model được cache trong RAM của chính tiến trình app.py: lần
+convert đầu tiên cho mỗi giọng chậm (load model từ đĩa), các lần sau nhanh
+hơn hẳn, miễn app.py không bị restart.
 
-    cd /d D:\hoc\project\clone-voice-station\local_rvc
-    venv\Scripts\python.exe local_rvc_server.py
-
-Mặc định port 8091 (đổi bằng biến môi trường LOCAL_RVC_PORT nếu cần).
-Đây chỉ là lớp cache tăng tốc — nếu không chạy, RVC vẫn hoạt động qua
-đường subprocess chậm hơn (voice/rvc_local.py tự fallback).
-
-Nếu venv chưa tồn tại: lần đầu dùng RVC local, voice/rvc_local.py sẽ tự
-tạo venv này + tự clone RVC-Project WebUI vào local_rvc/RVC (cần "git"
-có trong PATH).
+Lần đầu dùng RVC local, voice/rvc_local.py sẽ tự clone RVC-Project WebUI
+vào local_rvc/RVC + tự build venv riêng cho phần TRAINING (local_rvc/venv,
+cần "git" có trong PATH) — venv này giờ chỉ dùng khi train, không còn liên
+quan gì tới việc convert.
 
 --------------------------------------------------------------------------
 3. LẦN ĐẦU CHẠY (tự seed dữ liệu)

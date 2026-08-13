@@ -3,11 +3,13 @@ voice/rvc_local.py
 Local (this-machine) fallback for RVC training + conversion, used by
 voice/rvc_client.py when the Colab server (colab/voice_server.ipynb) is not
 configured or unreachable -- voice cloning needs to keep working on a
-deployment with no Colab session running. Both training and conversion run
-the same modern, fairseq-free pipeline from a locally-cloned copy of
-RVC-Project's WebUI repo (train/*.py for training, infer/cli.py for
-conversion), invoked inside an isolated venv -- see ensure_set_up() for why
-the venv, and convert_local()'s docstring for why not the rvc-python PyPI
+deployment with no Colab session running. Both run against the same modern,
+fairseq-free pipeline from a locally-cloned copy of RVC-Project's WebUI repo.
+Training (train/*.py) still runs as a subprocess inside an isolated venv --
+see ensure_set_up() for why. Conversion (infer/vc/modules.py's VC) runs
+in-process instead, directly inside this same app.py process/port -- see
+convert_local()'s docstring for why that's safe despite the dependency
+concerns that keep training in its own venv, and why not the rvc-python PyPI
 package (its fairseq==0.12.2 dependency cannot even be imported on Python
 3.12). Device is picked at runtime instead of hardcoded, unlike the Colab
 notebook's own "cuda:0".
@@ -26,6 +28,7 @@ Colab available never pays the import/clone/download cost.
 """
 
 import glob
+import io
 import os
 import queue
 import re
@@ -157,29 +160,35 @@ _LOSS_LINE_RE = re.compile(
 # detects an epoch boundary regardless of which language train.py's logger is using.
 _EPOCH_MARKER = "====> "
 
-# convert_local() shells out to infer/cli.py per call (no cached in-process model --
-# see its docstring for why), so this only needs to bound one subprocess's runtime.
-# Measured directly (2026-08-13, same hardware): a clean, uncontended call took 61s
-# wall-clock even though the tool's own reported inference time (Features+F0+Synthesis)
-# was only ~10s -- the rest is fixed per-call overhead (interpreter start, torch/CUDA
-# import, CUDA init, loading the .pth/.index from disk). That's already up from an
-# earlier ~34s measurement (see rag-legal-assistant's station_client.py comment) --
-# the leading suspect is voice/stt.py's PhoWhisper-small now sitting persistently in
-# this same GPU's VRAM as the STT fallback (added this session), adding contention
-# for a separate subprocess's own CUDA init/inference. 120 was cutting a *single*,
-# uncontended call close with real-world variance on top of it; callers upstream
-# (station_client.py's speak_timeout) must stay comfortably above this value.
+# Bounds a single convert_local() call in _convert_with_timeout() below. Was measured
+# (2026-08-13) at 61s wall-clock for a subprocess-per-call invocation of infer/cli.py
+# (interpreter start + torch/CUDA import + CUDA init + loading the .pth/.index from
+# disk each time, on top of ~10s actual inference) -- now that conversion runs
+# in-process with a cached VC() (see convert_local()'s docstring), only the *first*
+# call per speaker (or the very first call in this process) pays anything close to
+# that; a warm call for an already-loaded speaker is well under a second. Kept at the
+# same 150s regardless, since it still has to cover that cold-start case, and callers
+# upstream (station_client.py's speak_timeout) must stay comfortably above this value.
 CONVERT_TIMEOUT_SEC = 150
 
-# Serializes convert_local() calls -- without this, concurrent /api/speak requests
-# (e.g. a caller retrying because a prior call felt slow) each spawn their own
-# infer.cli subprocess with no coordination, and since there's only one local GPU,
-# they don't run in parallel so much as fight each other for it: confirmed for real,
-# 4 infer.cli processes for the same speaker running at once, each taking far longer
-# than CONVERT_TIMEOUT_SEC/1 would alone. A single GPU has no real parallelism to
-# offer here anyway, so queuing calls one at a time is strictly better than letting
-# them contend.
+# Serializes both access to the cached _convert_vc/_convert_loaded_speaker state below
+# and the actual inference call -- without this, concurrent /api/speak requests (e.g. a
+# caller retrying because a prior call felt slow) would race on which speaker's weights
+# are currently loaded into the single cached VC(), and fight each other for the one
+# local GPU during inference (confirmed for real, back when this ran as a subprocess
+# per call: 4 infer.cli processes for the same speaker running at once, each taking far
+# longer than running alone would). A single GPU has no real parallelism to offer here
+# anyway, so queuing calls one at a time is strictly better than letting them contend.
 _convert_lock = threading.Lock()
+
+# Set once, lazily, by _prepare_rvc_import() -- see its docstring.
+_rvc_import_ready = False
+
+# The cached in-process VC() instance + which speaker's weights it currently has
+# loaded, both guarded by _convert_lock. None until the first convert_local() call
+# actually needs them.
+_convert_vc = None
+_convert_loaded_speaker = None
 
 
 def device() -> str:
@@ -318,14 +327,19 @@ def ensure_set_up(progress_cb=None):
     install failure) -- callers should treat that as "local fallback
     unavailable right now".
 
-    The venv is required because this repo's own pinned dependencies
-    (fastapi<0.100, pydantic<2, starlette<0.28 -- it still ships a Gradio 3.14
-    webui we never use) directly conflict with clone-voice-station's own
-    FastAPI stack. Installing them into this process's environment would
-    downgrade/break the running app, so training subprocesses always use
-    _venv_python() instead of sys.executable. Local CONVERSION (rvc-python, in
-    convert_local() above) is unaffected -- it's a separate lightweight
-    package with no such conflict, so it keeps running in-process.
+    The venv is required for TRAINING because this repo's own full
+    requirements files (fastapi<0.100, pydantic<2, starlette<0.28, a Gradio
+    3.14 webui -- none of which we actually use) directly conflict with
+    clone-voice-station's own FastAPI stack; installing them into this
+    process's environment would downgrade/break the running app, so training
+    subprocesses always use _venv_python() instead of sys.executable, and
+    only TRAINING_PACKAGES (below) -- never the repo's own requirements files
+    -- get installed into it. CONVERSION doesn't need any of that: it only
+    imports infer/vc/modules.py's VC (see convert_local()), which never
+    touches fastapi/pydantic/gradio, so it runs directly in this process
+    instead (see convert_local()'s docstring) -- this function still has to
+    run first for it too, though, since it's what clones the repo and
+    downloads the pretrained assets both paths need.
 
     Serialized across processes via _acquire_setup_lock() -- see its docstring
     for why (a real corruption from two concurrent callers racing on the same
@@ -447,6 +461,135 @@ def has_local_model(speaker_id: str) -> bool:
     return os.path.exists(pth_path) and os.path.exists(index_path)
 
 
+def _prepare_rvc_import():
+    """Makes the cloned RVC repo importable from *this* process (adds it to
+    sys.path, points its weight_root/index_root/outside_index_root/rmvpe_root
+    env vars at absolute paths) and chdir()s into it -- once, lazily, the
+    first time convert_local() actually needs it. Idempotent.
+
+    Deliberately does NOT `import infer.cli` (the module the old subprocess-
+    per-call version below used to shell out to) to get any of this: reading
+    it shows it does its own `os.chdir(PROJECT_ROOT)` as an *import-time* side
+    effect, which was harmless when it only ever ran inside local_rvc_server.py
+    -- a whole separate process dedicated to nothing else -- but would silently
+    chdir this entire app.py process (and everything else running in it) the
+    moment something merely imported it for its create_config() helper. So the
+    small pieces actually needed (this function, _create_rvc_config() below)
+    are reimplemented directly against configs/config.py and infer/vc/modules.py
+    instead, with the chdir happening explicitly, once, right here -- not as a
+    surprise side effect of an unrelated import.
+
+    The chdir itself is still necessary despite everything else in this app
+    resolving its own paths from BASE_DIR/__file__ (confirmed by reading
+    app.py, database/database.py, and every voice/*.py and engine/*.py module
+    that touches the filesystem): i18n/i18n.py's I18nAuto loads its locale
+    file from a bare cwd-relative path ("./i18n/locale/<lang>.json"), and
+    infer/vc/modules.py imports I18nAuto at module load time -- without the
+    right cwd, that raises FileNotFoundError the first time a VC() is built.
+    """
+    global _rvc_import_ready
+    if _rvc_import_ready:
+        return
+
+    # Windows-only heap-corruption guard -- confirmed for real: letting
+    # infer/vc/pipeline.py's own imports (faiss, librosa -> transitively
+    # scikit-learn -> pandas) be what first pulls scikit-learn/pandas's native
+    # extensions into this process crashed the whole interpreter hard (no
+    # catchable Python exception -- "Windows fatal exception: code 0xc0000374",
+    # i.e. STATUS_HEAP_CORRUPTION) partway through importing zoneinfo for
+    # pandas, deep inside CPython's own import machinery. Reproducibly fixed
+    # by importing these four here ourselves first, in this order, before
+    # anything RVC-side gets a chance to import them in whatever order its own
+    # module graph happens to produce -- some mismatch in *that* ordering
+    # between the DLLs these packages carry (OpenMP/MKL-style native math
+    # runtimes, the usual suspect for this exact crash signature) is the
+    # leading theory, though the precise DLL conflict wasn't pinned down
+    # further since this ordering reliably avoids it.
+    import sklearn  # noqa: F401
+    import pandas  # noqa: F401
+    import faiss  # noqa: F401
+    import torch  # noqa: F401
+
+    if RVC_REPO_DIR not in sys.path:
+        sys.path.insert(0, RVC_REPO_DIR)
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("index_root", os.path.join(RVC_REPO_DIR, "logs"))
+    os.environ.setdefault("outside_index_root", os.path.join(RVC_REPO_DIR, "assets", "indices"))
+    os.environ.setdefault("rmvpe_root", os.path.join(RVC_REPO_DIR, "assets", "rmvpe"))
+    os.chdir(RVC_REPO_DIR)
+    _rvc_import_ready = True
+
+
+def _create_rvc_config():
+    """Reimplements infer/cli.py's create_config() (without importing that
+    module -- see _prepare_rvc_import()'s docstring for why): configs/config.py's
+    Config.arg_parse() calls argparse.parse_args() with no explicit argv, i.e.
+    it parses *this process's own* sys.argv by default. Swapped out for a bare
+    argv for the duration of the call so app.py's real command-line arguments
+    (whatever they happen to be) can't collide with RVC's own unrelated
+    --port/--pycmd/--colab/... parser."""
+    from configs.config import Config
+
+    original_argv = sys.argv[:]
+    sys.argv = [sys.argv[0]]
+    try:
+        return Config()
+    finally:
+        sys.argv = original_argv
+
+
+def _get_convert_vc():
+    """Returns the cached in-process VC() instance, building it on first use.
+    Caller must already hold _convert_lock. See convert_local()'s docstring."""
+    global _convert_vc
+    if _convert_vc is None:
+        _prepare_rvc_import()
+        from infer.vc.modules import VC
+
+        config = _create_rvc_config()
+        _convert_vc = VC(config)
+        logger.info(f"[RVC-local] In-process VC initialized, device={config.device}")
+    return _convert_vc
+
+
+def _convert_with_timeout(pth_path: str, index_path: str, in_path: str,
+                           pitch: int, index_rate: float):
+    """Runs the actual (locked, cached) VC.vc_single() call on a background
+    thread and waits on it with a bound, so a hang here (bad checkpoint,
+    driver-level GPU issue, ...) can't block the calling request forever --
+    the closest in-process equivalent of the old subprocess.run(timeout=...)
+    below, now that there's no child process to hard-kill on timeout. If it
+    does time out, the wait here gives up and reports failure, but the
+    background thread (and the lock it's holding) are left running until the
+    call genuinely finishes -- same as a slow-but-live subprocess would have
+    kept _convert_lock held for its actual duration.
+    """
+    result_box = queue.Queue(maxsize=1)
+
+    def _worker():
+        global _convert_loaded_speaker
+        try:
+            with _convert_lock:
+                vc = _get_convert_vc()
+                if _convert_loaded_speaker != os.path.basename(pth_path):
+                    os.environ["weight_root"] = os.path.dirname(pth_path)
+                    vc.get_vc(os.path.basename(pth_path))
+                    _convert_loaded_speaker = os.path.basename(pth_path)
+                status, result = vc.vc_single(
+                    0, in_path, pitch, F0_METHOD, index_path, index_rate, 0, 1.0, PROTECT,
+                )
+            result_box.put(("ok", status, result))
+        except Exception as e:
+            result_box.put(("error", e, None))
+
+    threading.Thread(target=_worker, daemon=True).start()
+    try:
+        outcome, status_or_error, result = result_box.get(timeout=CONVERT_TIMEOUT_SEC)
+    except queue.Empty:
+        return "timeout", None, None
+    return outcome, status_or_error, result
+
+
 def convert_local(audio_bytes: bytes, speaker_id: str, pitch: int = None,
                    index_rate: float = None, mime: str = "audio/mp3") -> bytes | None:
     """
@@ -460,16 +603,24 @@ def convert_local(audio_bytes: bytes, speaker_id: str, pitch: int = None,
     dataclass definitions use a mutable-default pattern
     ("field: SomeDataclass = SomeDataclass()") that Python 3.11+'s dataclasses
     module now correctly rejects at class-definition time. No amount of pip
-    installing works around that.
+    installing works around that. Then used infer/cli.py (in the cloned repo,
+    run as a subprocess inside the training venv) instead, the same
+    fairseq-free pipeline (Transformers-based HuBERT, see infer/hubert.py)
+    training already used -- correct, but slow: a fresh interpreter, fresh
+    CUDA init, and a fresh model load from disk on every single call, and (the
+    original motivation for this rewrite) it needed running as a separate
+    process/port (local_rvc_server.py, now retired) to get in-process caching
+    at all, since app.py's own process couldn't import the RVC repo directly
+    without conflicting with its own FastAPI stack -- see ensure_set_up()'s
+    docstring for why that conflict turned out not to actually apply to
+    conversion (only to training).
 
-    Uses infer/cli.py (in the cloned repo, run inside the training venv)
-    instead -- the same modern, fairseq-free pipeline (Transformers-based
-    HuBERT, see infer/hubert.py) already proven working for training, so no
-    separate setup or dependency story from that. Slower per-call than a
-    cached in-process model would be (reloads the model fresh every time,
-    since each call is its own subprocess) but this is already a fallback
-    path only used when Colab is unavailable, so simplicity and not
-    depending on fairseq wins over shaving off a load time.
+    Now imports infer/vc/modules.py's VC directly and keeps one instance
+    cached in this process for its whole lifetime (see _get_convert_vc()) --
+    HuBERT/RMVPE stay resident in memory across calls; only the (small)
+    per-speaker net_g weights get reloaded, and only when the requested
+    speaker actually changes from the previous call. _convert_with_timeout()
+    bounds each call so a hang can't block the calling request forever.
 
     Returns None if no local model is available, or on any failure -- callers
     (voice/rvc_client.py) should treat that the same as "Colab unreachable and
@@ -491,54 +642,32 @@ def convert_local(audio_bytes: bytes, speaker_id: str, pitch: int = None,
     with tempfile.NamedTemporaryFile(suffix=in_suffix, delete=False) as fin:
         fin.write(audio_bytes)
         in_path = fin.name
-    out_path = in_path + "_rvc.wav"
 
     try:
-        with _convert_lock:
-            # PYTHONUTF8=1: infer/cli.py prints some i18n status text containing non-Latin
-            # characters (e.g. "【...】"-style brackets); without this, the child's stdout
-            # defaults to the Windows console's codepage (cp1252 here), and printing one of
-            # those characters crashes it with UnicodeEncodeError mid-run -- hit this for
-            # real, right after the model had already loaded and inference had started.
-            child_env = os.environ.copy()
-            child_env["PYTHONUTF8"] = "1"
-            result = subprocess.run([
-                _venv_python(), "-m", "infer.cli",
-                "--model", pth_path,
-                "--index", index_path,
-                "--input", in_path,
-                "--output", out_path,
-                "--pitch", str(pitch),
-                "--f0-method", F0_METHOD,
-                "--index-rate", str(index_rate),
-                "--protect", str(PROTECT),
-                "--overwrite",
-            ], cwd=RVC_REPO_DIR, capture_output=True, timeout=CONVERT_TIMEOUT_SEC, env=child_env,
-               # encoding=utf-8 (not text=True, which decodes with the locale default --
-               # cp1252 here) so *this* side decodes the child's output consistently with
-               # PYTHONUTF8=1 above. Without this, a background reader thread inside
-               # subprocess.run() hit a UnicodeDecodeError of its own trying to decode the
-               # same non-Latin bytes as cp1252 -- didn't break this particular run (the
-               # audio file was already fully written by the time it happened) but printed
-               # a scary, misleading traceback and could lose the tail of stderr on a run
-               # where the timing worked out worse.
-               encoding="utf-8", errors="replace")
-            if result.returncode != 0:
-                detail = (result.stdout[-800:] + "\n" + result.stderr[-800:]).strip()
-                logger.error(f"[RVC-local] convert failed for {speaker_id} on {device()}:\n{detail}")
-                return None
-            with open(out_path, "rb") as f:
-                return f.read()
-    except subprocess.TimeoutExpired:
-        logger.error(f"[RVC-local] convert timed out for {speaker_id} after {CONVERT_TIMEOUT_SEC}s")
-        return None
+        outcome, status_or_error, result = _convert_with_timeout(
+            pth_path, index_path, in_path, pitch, index_rate,
+        )
+        if outcome == "timeout":
+            logger.error(f"[RVC-local] convert timed out for {speaker_id} after {CONVERT_TIMEOUT_SEC}s")
+            return None
+        if outcome == "error":
+            logger.error(f"[RVC-local] convert failed for {speaker_id} on {device()}: {status_or_error}")
+            return None
+        if not result or result[0] is None or result[1] is None:
+            logger.error(f"[RVC-local] convert failed for {speaker_id} on {device()}: {status_or_error}")
+            return None
+
+        import soundfile as sf
+
+        buf = io.BytesIO()
+        sf.write(buf, result[1], result[0], format="WAV")
+        return buf.getvalue()
     except Exception as e:
         logger.error(f"[RVC-local] convert failed for {speaker_id} on {device()}: {e}")
         return None
     finally:
-        for p in (in_path, out_path):
-            if os.path.exists(p):
-                os.unlink(p)
+        if os.path.exists(in_path):
+            os.unlink(in_path)
 
 
 def _slice_and_normalize(src: str, out_dir: str, sr: int, min_ms: int = 3000, max_ms: int = 8000) -> int:

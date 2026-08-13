@@ -12,18 +12,44 @@ requests>=2.31.0
 
 # RVC local fallback (voice/rvc_local.py) — used when the Colab endpoint above is
 # unset/unreachable, so voice conversion/training still work on this machine's own
-# GPU (if torch.cuda.is_available()) or CPU. Both run inside an isolated venv
+# GPU (if torch.cuda.is_available()) or CPU. TRAINING runs inside an isolated venv
 # rvc_local.py builds on first use (git clone of RVC-Project/Retrieval-based-Voice-
 # Conversion-WebUI + a handful of pip installs) -- needs `git` on PATH. No rvc-python
 # package here: it depends on fairseq==0.12.2, which cannot even be imported on
 # Python 3.12 (a hard language-level break in fairseq's own dataclass definitions,
-# not a version pin problem); rvc_local.py's convert_local() uses the cloned repo's
-# own infer/cli.py instead, the same fairseq-free pipeline training already uses.
+# not a version pin problem); rvc_local.py's training uses the cloned repo's own
+# train/*.py scripts instead, a fairseq-free pipeline.
 # faiss-cpu IS a direct dependency here though (not left to the cloned repo's own
-# requirements) because the isolated venv is --system-site-packages and inherits it
-# from here, and infer/cli.py/train/train_index.py both need it for the FAISS
-# retrieval index.
+# requirements) because both the isolated training venv (--system-site-packages) and
+# this process's own in-process CONVERSION (see below) need it for the FAISS
+# retrieval index, and train/train_index.py needs it too.
 faiss-cpu>=1.7.4
+
+# CONVERSION (as opposed to training, above) runs in-process in this same app.py
+# process/port instead of a separate venv+server — see voice/rvc_local.py's
+# convert_local() docstring for the full story (a now-retired local_rvc_server.py
+# used to run it from a separate process/port; that's no longer needed since the
+# actual RVC-repo imports conversion needs — infer/audio.py, infer/vc/pipeline.py —
+# don't touch the fastapi/pydantic/gradio pins that make training's own venv
+# necessary). These three are what those imports pull in beyond what's already
+# above (torch/faiss/soundfile/librosa/transformers): `av` and `ffmpeg-python`
+# (audio decoding in infer/audio.py) and `praat-parselmouth` (imported
+# unconditionally by infer/vc/pipeline.py even though the F0 method actually used,
+# rmvpe, doesn't need it).
+av>=11.0.0
+ffmpeg-python>=0.2.0
+praat-parselmouth>=0.4.3
+
+# Not imported by any RVC code directly -- pinned here only because
+# voice/rvc_local.py's _prepare_rvc_import() must import them itself, in this
+# fixed order, before anything RVC-side (transitively, via librosa) gets a
+# chance to import them in a different order: confirmed for real that the
+# wrong ordering corrupts the process heap outright (Windows-only, "fatal
+# exception: code 0xc0000374") partway through a native-extension import, no
+# catchable Python exception, the whole interpreter just dies. See that
+# function's docstring for the detail.
+scikit-learn>=1.3.0
+pandas>=2.0.0
 
 # Manager dashboard "realism test" (engine/realism_engine.py) — speaker-embedding
 # cosine similarity between a synthesized clip and the user's own uploaded samples.

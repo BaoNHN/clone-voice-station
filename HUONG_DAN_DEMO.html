@@ -169,19 +169,12 @@
         <p>Service STT/TTS/RVC độc lập, đa client, có manager dashboard.</p>
       </div>
       <div class="node">
-        <h4><span class="pill p8091">8091</span> Local RVC Worker</h4>
-        <p>Cache model RVC trong RAM cho clone-voice-station — tăng tốc lần đọc thứ 2 trở đi (~0.5–5s so với ~65s lần đầu).</p>
-      </div>
-      <div class="node">
         <h4><span class="pill p8091">8091</span> voice-lab-example</h4>
-        <p>App demo độc lập — <strong>trùng port với Local RVC Worker</strong>, không chạy đồng thời cả hai.</p>
+        <p>App demo độc lập, minh hoạ chạy Whisper local so với gọi qua mạng.</p>
       </div>
     </div>
 
-    <div class="box warn">
-      <strong class="label">Lưu ý port</strong>
-      Local RVC Worker và voice-lab-example đều mặc định port 8091 nhưng không liên quan nhau. Không bật cả hai cùng lúc trong một buổi demo trừ khi đã đổi port một trong hai.
-    </div>
+    <p>RVC fallback local (khi chưa cấu hình Colab, hoặc Colab không kết nối được) chạy ngay trong tiến trình clone-voice-station (8090) — có cache model trong RAM, không cần service/port riêng nữa.</p>
 
     <h2 id="thumuc">1. Cấu trúc thư mục bắt buộc</h2>
     <p>4 thư mục phải nằm cùng cấp (anh em):</p>
@@ -203,13 +196,12 @@ cd voice-lab-example
 pip install -r requirements.txt</code></pre>
     <p>rag-legal-assistant cần thêm <code>groqkey.txt</code> (API key Groq, dạng <code>gsk_xxxx...</code>) ở thư mục gốc — xem mục 5.</p>
 
-    <h2 id="chaynhanh">3. Chạy nhanh — 1 lệnh khởi động cả 3</h2>
+    <h2 id="chaynhanh">3. Chạy nhanh — 1 lệnh khởi động cả 2</h2>
     <pre><code>D:\hoc\project\rag-legal-assistant\start_all.bat</code></pre>
     <p>Thứ tự tự động, có health-check giữa mỗi bước:</p>
     <ol>
-      <li><span class="step-num">1</span>Local RVC Worker <span class="pill p8091">8091</span> — cửa sổ cmd riêng</li>
-      <li><span class="step-num">2</span>Clone Voice Station <span class="pill p8090">8090</span> — cửa sổ cmd riêng</li>
-      <li><span class="step-num">3</span>rag-legal-assistant <span class="pill p8000">8000</span> — chạy ngay trong cửa sổ hiện tại</li>
+      <li><span class="step-num">1</span>Clone Voice Station <span class="pill p8090">8090</span> — cửa sổ cmd riêng</li>
+      <li><span class="step-num">2</span>rag-legal-assistant <span class="pill p8000">8000</span> — chạy ngay trong cửa sổ hiện tại</li>
     </ol>
     <div class="box ok">
       <strong class="label">Sau khi lên</strong>
@@ -218,11 +210,6 @@ pip install -r requirements.txt</code></pre>
 
     <h2 id="chaytaytay">4. Chạy thủ công từng service</h2>
     <p>Dùng khi cần xem log lỗi trực tiếp, hoặc chỉ muốn chạy một phần hệ thống.</p>
-    <h3>Local RVC Worker <span class="pill p8091">8091</span> (tuỳ chọn nhưng nên bật)</h3>
-    <pre><code>cd /d D:\hoc\project\clone-voice-station\local_rvc
-venv\Scripts\python.exe local_rvc_server.py</code></pre>
-    <p>venv riêng, không dùng chung với env chính. Nếu venv chưa có, lần đầu dùng RVC local sẽ tự tạo (cần <code>git</code> trong PATH để clone RVC-Project WebUI).</p>
-
     <h3>Clone Voice Station <span class="pill p8090">8090</span></h3>
     <pre><code>cd /d D:\hoc\project\clone-voice-station
 python app.py</code></pre>
@@ -301,13 +288,13 @@ python start_ngrok.py</code></pre>
     <p>Nếu thấy dòng "LISTENING", lấy PID (cột cuối) rồi tắt:</p>
     <pre><code>taskkill /F /PID &lt;số_PID&gt;</code></pre>
 
-    <h3>Cửa sổ Local RVC Worker / Clone Voice Station đóng ngay</h3>
+    <h3>Cửa sổ Clone Voice Station đóng ngay</h3>
     <p>Mở lại bằng tay (mục 4) để đọc lỗi trực tiếp thay vì qua start_all.bat.</p>
 
     <h3>Kiểm tra rvc_endpoint đang trỏ đúng chưa</h3>
     <pre><code>cd /d D:\hoc\project\clone-voice-station
 python -c "from database.database import get_setting; print(get_setting('rvc_endpoint'))"</code></pre>
-    <p>Phải là <code>http://127.0.0.1:8091</code> khi dùng Local RVC Worker, hoặc URL cloudflared khi dùng Colab.</p>
+    <p>Để trống hoặc chưa cấu hình là bình thường — RVC tự chạy fallback local (trong tiến trình clone-voice-station). Chỉ cần set khi muốn dùng Colab (URL cloudflared).</p>
 
     <footer>
       Chi tiết từng tính năng: xem <code>terminal.txt</code> trong từng thư mục project, và <code>HUONG_DAN_DEMO.md</code> của mỗi project (<code>HUONG_DAN_CHAY_TOAN_HE_THONG.md</code>, nguồn Markdown của trang này, nằm cùng thư mục).
