@@ -978,6 +978,37 @@ def _get_owned_stt_adapter(adapter_id: int, guest_id: int) -> dict:
     return adapter
 
 
+def _build_stt_pack_response(adapter: dict) -> Response:
+    """Builds the .stt-pack.zip Response for an adapter -- shared by the
+    guest's own download, the manager's any-adapter download, and the
+    guest-facing "download the current system default" route below (three
+    different auth/ownership rules, same file format)."""
+    has_lora = bool(adapter["adapter_path"]) and os.path.isdir(adapter["adapter_path"])
+    manifest = {
+        "adapter_id": adapter["id"],
+        "name": adapter["name"],
+        "base_model": adapter["base_model"],
+        "tier": 2 if has_lora else 1,
+        "backend_used": adapter["backend_used"] if has_lora else None,
+        "created_at": adapter["created_at"],
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        zf.writestr("hotwords.json", json.dumps(adapter["hotwords"], ensure_ascii=False, indent=2))
+        if has_lora:
+            for fname in ("adapter_model.safetensors", "adapter_config.json"):
+                fpath = os.path.join(adapter["adapter_path"], fname)
+                if os.path.exists(fpath):
+                    zf.write(fpath, arcname=fname)
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{adapter["id"]}.stt-pack.zip"'},
+    )
+
+
 def _reject_if_training(adapter: dict):
     """Guards every hotwords/sample mutation below -- the frontend already disables
     these controls while status=='training' (see stt_guest_dashboard.html), but that
@@ -1160,31 +1191,23 @@ async def continue_stt_adapter_route(adapter_id: int, pack: UploadFile = File(..
 @app.get("/api/stt/adapters/{adapter_id}/download")
 async def download_stt_adapter_route(adapter_id: int, guest_id: int = Depends(require_stt_guest)):
     adapter = _get_owned_stt_adapter(adapter_id, guest_id)
+    return _build_stt_pack_response(adapter)
 
-    has_lora = bool(adapter["adapter_path"]) and os.path.isdir(adapter["adapter_path"])
-    manifest = {
-        "adapter_id": adapter["id"],
-        "name": adapter["name"],
-        "base_model": adapter["base_model"],
-        "tier": 2 if has_lora else 1,
-        "backend_used": adapter["backend_used"] if has_lora else None,
-        "created_at": adapter["created_at"],
-    }
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        zf.writestr("hotwords.json", json.dumps(adapter["hotwords"], ensure_ascii=False, indent=2))
-        if has_lora:
-            for fname in ("adapter_model.safetensors", "adapter_config.json"):
-                fpath = os.path.join(adapter["adapter_path"], fname)
-                if os.path.exists(fpath):
-                    zf.write(fpath, arcname=fname)
 
-    return Response(
-        content=buf.getvalue(),
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{adapter_id}.stt-pack.zip"'},
-    )
+@app.get("/api/stt/default_pack/download")
+async def download_default_stt_pack_route(guest_id: int = Depends(require_stt_guest)):
+    """Lets any logged-in STT Lab guest grab the current system-wide default
+    adapter (see /manager/stt/adapters/{id}/set-default) as a .stt-pack.zip --
+    unlike the owner-scoped download above, this is deliberately NOT
+    ownership-restricted, since the whole point of a system default is that
+    it's already what /api/transcribe falls back to for every client with
+    nothing of their own published; a guest wanting to try it locally
+    (clone_voice_client.local_stt, see voice-lab-example's /settings) has no
+    other way to find/download it if they don't happen to own it themselves."""
+    adapter = get_default_stt_adapter()
+    if not adapter:
+        raise HTTPException(status_code=404, detail="Hệ thống chưa có adapter mặc định nào.")
+    return _build_stt_pack_response(adapter)
 
 
 @app.post("/api/stt/adapters/{adapter_id}/publish")
@@ -1444,31 +1467,7 @@ async def manager_continue_stt_adapter_route(adapter_id: int, pack: UploadFile =
 @app.get("/manager/stt/adapters/{adapter_id}/download")
 async def manager_download_stt_adapter_route(adapter_id: int, manager: str = Depends(require_manager)):
     adapter = _get_stt_adapter_or_404(adapter_id)
-
-    has_lora = bool(adapter["adapter_path"]) and os.path.isdir(adapter["adapter_path"])
-    manifest = {
-        "adapter_id": adapter["id"],
-        "name": adapter["name"],
-        "base_model": adapter["base_model"],
-        "tier": 2 if has_lora else 1,
-        "backend_used": adapter["backend_used"] if has_lora else None,
-        "created_at": adapter["created_at"],
-    }
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        zf.writestr("hotwords.json", json.dumps(adapter["hotwords"], ensure_ascii=False, indent=2))
-        if has_lora:
-            for fname in ("adapter_model.safetensors", "adapter_config.json"):
-                fpath = os.path.join(adapter["adapter_path"], fname)
-                if os.path.exists(fpath):
-                    zf.write(fpath, arcname=fname)
-
-    return Response(
-        content=buf.getvalue(),
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{adapter_id}.stt-pack.zip"'},
-    )
+    return _build_stt_pack_response(adapter)
 
 
 @app.post("/manager/stt/adapters/{adapter_id}/unpublish")
