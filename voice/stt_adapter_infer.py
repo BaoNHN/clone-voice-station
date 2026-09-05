@@ -2,21 +2,17 @@
 voice/stt_adapter_infer.py
 Tier-2 STT inference: loads a manager-published stt_adapters row's LoRA
 adapter on top of its HF Whisper base model and transcribes with it, for
-POST /api/transcribe callers whose client app has an adapter published (see
-database.get_published_stt_adapter_for_client() / app.py's transcribe_route).
-When nothing is published for the calling client, or this raises, the caller
-falls back to the existing Colab/local base-Whisper path (voice/stt.py) --
-same degrade-gracefully contract that path already has.
+POST /api/transcribe callers whose client app has an adapter published. When
+nothing is published, or this raises, the caller falls back to the existing
+Colab/local base-Whisper path (voice/stt.py).
 
-Uses transformers' WhisperForConditionalGeneration + peft (matching
-voice/stt_local_train.py's training stack, NOT the openai-whisper package
+Uses transformers' WhisperForConditionalGeneration + peft, matching
+voice/stt_local_train.py's training stack (not the openai-whisper package
 voice/stt.py uses) -- an adapter trained via stt_local_train.py can only be
 loaded back with the same model classes. Loaded lazily and cached per
-adapter_path so repeated calls to the same published adapter don't reload the
-base model + LoRA weights every request; a single global lock serializes both
-loading and generate() calls -- this deployment is single-worker (same
-thesis-scale assumption already documented in app.py's login-rate-limit
-comment), so a real per-model concurrency scheme would be premature.
+adapter_path so repeated calls don't reload the base model + LoRA weights
+every request; a single global lock serializes loading and generate() calls,
+since this deployment is single-worker.
 """
 
 import os

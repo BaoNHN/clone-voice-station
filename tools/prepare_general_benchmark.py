@@ -2,42 +2,30 @@
 """
 tools/prepare_general_benchmark.py
 One-time setup: downloads a fixed general-Vietnamese-speech benchmark into
-stt_general_benchmark/ -- this is voice/stt_local_train.py's Gate 2 (see that module's
-docstring): every Tier 2 adapter, regardless of which guest or domain trained it, gets
-scored against this same fixed set before it's allowed to ship, on top of (not instead of)
-the guest's own held-out test split from _split_train_val_test().
+stt_general_benchmark/ -- this is voice/stt_local_train.py's Gate 2: every
+Tier 2 adapter gets scored against this same fixed set before shipping, on
+top of (not instead of) the guest's own held-out split.
 
-Why a *separate* dataset from the guest's own domain, not just a bigger held-out slice of
-their upload: confirmed for real (see tools/import_hf_stt_dataset.py's medical-consultation
-experiments) that a held-out split carved from the same upload batch -- no matter how it's
-sized or split -- still systematically overstated an adapter's real-world quality, because
-train and held-out samples from one guest's one upload share the same recording
-session/speaker/domain characteristics. A completely disjoint dataset the guest never
-touches is the only way to check "did this adapter get worse at Vietnamese speech in
-general", independent of whatever narrow domain it was fine-tuned on. This does NOT
-replace a genuine held-out check of the guest's own domain (that would need the guest to
-supply a second, separately-collected batch -- a product/UX change out of scope here) --
-it only catches the general-regression half of the problem.
+It's a dataset the guest never touches, not just a bigger held-out slice of
+their own upload -- a held-out split from the same upload batch still shares
+recording session/speaker/domain characteristics with the training data and
+systematically overstates real-world quality (confirmed against
+tools/import_hf_stt_dataset.py's medical-consultation experiments). This
+catches only the general-regression half of the problem; it doesn't replace
+a genuine held-out check of the guest's own domain.
 
-doof-ferb/vlsp2020_vinai_100h (~56.4k rows, general spontaneous Vietnamese speech scraped
-from real recordings, not read-aloud sentences) was picked over the medical dataset's own
-"test" split specifically because it has *nothing* to do with medical consultations --
-sharing a source with the training domain would reintroduce the same-distribution problem
-this benchmark exists to avoid. It has no speaker metadata and only a "train" split exists
-upstream (no official train/test division) -- both irrelevant disqualifiers for *fine-
-tuning* data (see the writeup that ruled it out for that role) but not for this one: this
-script deterministically takes a fixed slice once, saves it to disk, and that slice is
-never used for anything else in this project again -- what makes it "held out" is that no
-guest's training data ever comes from this dataset, not an upstream split label or speaker
-disjointness.
+doof-ferb/vlsp2020_vinai_100h was picked because it shares nothing with any
+guest's training domain (general spontaneous speech, not read-aloud). It has
+no official train/test split, which would disqualify it as fine-tuning data
+but doesn't matter here: this script takes one fixed deterministic slice and
+never touches the dataset again.
 
 Usage
 -----
     python tools/prepare_general_benchmark.py
 
-Re-running is safe (overwrites the same fixed slice, same offset/limit -- see BENCHMARK_
-constants below) but shouldn't be necessary; this only needs to run once per deployment
-(or if BENCHMARK_SIZE changes).
+Re-running is safe (overwrites the same fixed slice) but only needs to run
+once per deployment, or if BENCHMARK_SIZE changes.
 """
 import os
 import sys
@@ -46,18 +34,11 @@ import requests
 
 DATASETS_SERVER = "https://datasets-server.huggingface.co/rows"
 DATASET = "doof-ferb/vlsp2020_vinai_100h"
-# Offset chosen arbitrarily away from row 0 (no particular reason row 0 would be worse,
-# just avoids relying on however the upstream dataset orders its first few rows).
+# Offset away from row 0, arbitrary (just avoids the dataset's own row ordering).
 BENCHMARK_OFFSET = 1000
-# 500, not the 50-ish size of the guest-facing eval sets elsewhere in this project --
-# this set is downloaded once and reused by every training run forever, so its size only
-# costs disk space and per-run eval time, not repeated download bandwidth. Larger buys a
-# statistically tighter WER estimate for the one gate that's supposed to be trustworthy
-# regardless of what domain a guest trained on. The real cost this trades against is
-# per-run latency: two full passes over BENCHMARK_SIZE clips (once for the untrained base,
-# once for the selected epoch) on top of everything _split_train_val_test() already
-# evaluates -- worth watching if guest-facing training time becomes a complaint, in which
-# case shrinking this constant is the one-line fix.
+# Downloaded once and reused forever, so a larger size only costs one-time
+# disk/eval time, not repeated bandwidth -- buys a tighter WER estimate for
+# this gate.
 BENCHMARK_SIZE = 500
 MAX_DURATION_SEC = 20  # keep clips on the shorter side of this dataset's own <=80s range, given BENCHMARK_SIZE=500 already multiplies total eval time
 OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "stt_general_benchmark")

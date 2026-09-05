@@ -1,24 +1,21 @@
 """
 engine/stt_train_engine.py
-Orchestrates STT Lab Tier 2 (LoRA fine-tune) training — the STT counterpart to
-engine/voice_engine.py::run_training(), called via FastAPI BackgroundTasks from
-POST /api/stt/adapters/{id}/train.
+Orchestrates STT Lab Tier 2 (LoRA fine-tune) training — the STT counterpart
+to engine/voice_engine.py::run_training(), called via FastAPI
+BackgroundTasks from POST /api/stt/adapters/{id}/train.
 
 backend selection:
   "colab" — tries voice/stt_client.py against the Colab tunnel; fails the
-            adapter explicitly (no fallback) if Colab is unset/unreachable,
-            since forcing a backend is how a guest *compares* the two.
+            adapter explicitly (no fallback) if unreachable, since forcing
+            a backend is how a guest *compares* the two.
   "local" — always runs on this machine, via the single-worker queue below.
-  "auto"  — tries Colab first, falls back to local on failure. Same semantics
-            as RVC's run_training() today.
+  "auto"  — tries Colab first, falls back to local on failure.
 
-Unlike RVC's local-fallback training (voice/rvc_local.py, invoked straight
-from whichever BackgroundTasks thread called it, with zero cross-job
-concurrency guard), STT Lab has no API-key gate at all — a guest walks
-straight in and registers. Local training jobs are therefore never run
-inline: they're handed to a single dedicated worker thread + queue.Queue(),
-directly mirroring colab/voice_server.ipynb's own "one GPU -> one job at a
-time" pattern, just moved server-side for the local-fallback path.
+Unlike RVC's local-fallback training (invoked inline with no cross-job
+concurrency guard), STT Lab has no API-key gate -- a guest walks straight in
+and registers. Local jobs are therefore never run inline: they go to a
+single dedicated worker thread + queue.Queue(), mirroring Colab's own "one
+GPU -> one job at a time" pattern server-side.
 """
 
 import os
@@ -157,9 +154,7 @@ def run_training(adapter_id: int, backend: str = "auto"):
         return
 
     all_samples = _load_samples(adapter_id)
-    # is_holdout samples (a genuinely independent test set, e.g. a HuggingFace dataset's
-    # own official "test" split -- see voice/stt_local_train.py's train() docstring) are
-    # never part of the trainable pool, only the final gate.
+    # is_holdout samples are never part of the trainable pool, only the final gate.
     samples = [s for s in all_samples if not s.get("is_holdout")]
     holdout_samples = [s for s in all_samples if s.get("is_holdout")]
     if len(samples) < MIN_STT_TRAIN_SAMPLES:
@@ -178,10 +173,9 @@ def run_training(adapter_id: int, backend: str = "auto"):
                         holdout_samples=holdout_samples)
         return
 
-    # backend in ("colab", "auto") -- try Colab. Colab's own training pipeline (see
-    # colab/voice_server.ipynb) doesn't yet support a holdout-based gate -- out of scope
-    # here -- so holdout samples are excluded from what gets uploaded rather than silently
-    # trained on (which would defeat their whole purpose).
+    # backend in ("colab", "auto") -- try Colab. Its pipeline doesn't support a
+    # holdout-based gate yet, so holdout samples are excluded from upload
+    # rather than silently trained on.
     colab_samples = []
     for s in samples:
         with open(s["audio_path"], "rb") as f:
@@ -194,8 +188,8 @@ def run_training(adapter_id: int, backend: str = "auto"):
         return
 
     if backend == "colab":
-        # Explicitly forced Colab -- no silent fallback, that's the whole point
-        # of letting a guest pick a backend to compare them.
+        # Explicitly forced Colab -- no silent fallback, the whole point of
+        # letting a guest pick a backend to compare them.
         update_stt_adapter_training(
             adapter_id, "failed",
             error_message=f"Colab không khả dụng: {result.get('message', 'không rõ lý do')}",

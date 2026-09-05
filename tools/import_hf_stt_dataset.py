@@ -1,44 +1,37 @@
 #!/usr/bin/env python
 """
 tools/import_hf_stt_dataset.py
-Imports a HuggingFace audio+text dataset (default: HieuNguyen203/Vietnamese_Medical_Consultation)
-into STT Lab Tier 2 (LoRA fine-tune, voice/stt_local_train.py) as real training samples through
-the actual HTTP API a browser would use (register/login, create adapter, upload samples) --
-this is the answer to "can the system consume a dataset shaped like this one?": it does, end
-to end, not just by construction.
+Imports a HuggingFace audio+text dataset (default:
+HieuNguyen203/Vietnamese_Medical_Consultation) into STT Lab Tier 2
+(voice/stt_local_train.py) as real training samples, through the actual
+HTTP API a browser would use (register/login, create adapter, upload).
 
-Uses the public datasets-server.huggingface.co REST API (rows endpoint) instead of pulling in
-the `datasets`/`pyarrow` packages -- that endpoint already returns per-row {"audio": [{"src":
-<signed wav URL>}], "text": <transcript>} JSON, so a plain `requests` GET per page is enough
-(both clone-voice-station's requirements.txt and this dataset's schema were checked directly
-before writing this, not assumed).
+Uses the public datasets-server.huggingface.co REST API (rows endpoint)
+instead of the `datasets`/`pyarrow` packages -- it already returns per-row
+{"audio": [{"src": <signed wav URL>}], "text": <transcript>} JSON, so a
+plain `requests` GET per page is enough.
 
 What it does
 ------------
 1. Registers (or logs into) a fresh STT Lab guest account.
 2. Creates a Tier 2 adapter.
-3. Pulls TRAIN_LIMIT rows from the dataset's "train" split, uploads each as a training sample
-   (skipping any whose audio exceeds MAX_STT_SAMPLE_DURATION_SEC -- this dataset's own card says
-   20-30s per clip, right at that cap, so some rows do get skipped).
-4. Pulls EVAL_LIMIT rows from the "test" split and writes them to --eval-dir as
-   tools/eval_stt_wer.py-compatible (NNN.wav, NNN.txt) sidecar pairs -- a held-out set for
-   measuring the trained adapter's WER improvement (see voice-lab-example/tools/
-   test_medical_lora_wer.py, the other half of this demo).
-5. With --train: kicks off real training (backend=local, this machine's CPU/GPU) and polls
-   until done, printing progress the same way the STT Lab web UI would show it.
-6. With --download-pack PATH: once ready, downloads the .stt-pack.zip -- drop it into
-   voice-lab-example/stt_pack/ (or pass straight to test_medical_lora_wer.py --pack) to run
-   the LoRA-vs-base WER comparison.
+3. Pulls TRAIN_LIMIT rows from the "train" split, uploads each as a
+   training sample (skipping any over MAX_STT_SAMPLE_DURATION_SEC).
+4. Pulls EVAL_LIMIT rows from the "test" split and writes them to
+   --eval-dir as tools/eval_stt_wer.py-compatible (NNN.wav, NNN.txt)
+   sidecar pairs -- a held-out set for measuring WER improvement.
+5. With --train: kicks off real training (backend=local) and polls until
+   done, printing progress the same way the STT Lab web UI would show it.
+6. With --download-pack PATH: once ready, downloads the .stt-pack.zip for
+   the LoRA-vs-base WER comparison (voice-lab-example's test script).
 
 Usage
 -----
     python tools/import_hf_stt_dataset.py --train --download-pack medical.stt-pack.zip
 
-Defaults to training on the system's full per-adapter cap (MAX_STT_TRAIN_SAMPLES,
-database/database.py) -- a registered STT Lab account is training its own adapter on its own
-uploaded data, not an anonymous drive-by request, so there's no reason to hold back to a small
-subset by default the way the page's old guest-oriented cap did. Pass a smaller --train-limit
-for a quick pipeline smoke test.
+Defaults to training on the full per-adapter cap (MAX_STT_TRAIN_SAMPLES) --
+a registered account training its own data, not an anonymous drive-by
+request. Pass a smaller --train-limit for a quick pipeline smoke test.
 """
 import argparse
 import os
@@ -161,12 +154,9 @@ class StationSession:
         resp.raise_for_status()
 
     def get_adapter(self, adapter_id: int) -> dict:
-        # A longer read timeout than the other calls: local training runs synchronous
-        # CPU/GPU work on a background thread, but a burst of that work (e.g. right as a
-        # new epoch's model-loading step kicks in) can still delay the event loop's
-        # response to this poll well past a short timeout -- hit this for real (a 15s
-        # timeout aborted a poll mid-training even though the job itself finished
-        # correctly seconds later).
+        # Longer read timeout than the other calls: a burst of synchronous
+        # CPU/GPU work can delay the event loop's response to this poll past
+        # a short timeout even though training itself is still fine.
         resp = self.session.get(f"{self.base_url}/api/stt/adapters/{adapter_id}",
                                  headers=self._headers(), timeout=60)
         resp.raise_for_status()

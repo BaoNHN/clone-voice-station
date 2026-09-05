@@ -1,30 +1,8 @@
 """
 voice/rvc_local.py
-Local (this-machine) fallback for RVC training + conversion, used by
-voice/rvc_client.py when the Colab server (colab/voice_server.ipynb) is not
-configured or unreachable -- voice cloning needs to keep working on a
-deployment with no Colab session running. Both run against the same modern,
-fairseq-free pipeline from a locally-cloned copy of RVC-Project's WebUI repo.
-Training (train/*.py) still runs as a subprocess inside an isolated venv --
-see ensure_set_up() for why. Conversion (infer/vc/modules.py's VC) runs
-in-process instead, directly inside this same app.py process/port -- see
-convert_local()'s docstring for why that's safe despite the dependency
-concerns that keep training in its own venv, and why not the rvc-python PyPI
-package (its fairseq==0.12.2 dependency cannot even be imported on Python
-3.12). Device is picked at runtime instead of hardcoded, unlike the Colab
-notebook's own "cuda:0".
-
-Device selection mirrors voice/stt.py's Whisper fallback: torch.cuda.is_available()
-decides GPU vs CPU with no manual configuration needed. CPU training is
-*technically* wired through (the RVC scripts accept a "cpu" device string same
-as "cuda:0") but is realistically only a bounded-effort fallback, not a Colab
-replacement -- a run that takes ~30-60 min on a T4 GPU can take many hours on
-CPU, so _epochs_for_device() trains far fewer epochs on CPU to keep it
-finite. Expect lower quality from a CPU-trained voice than from Colab/GPU.
-
-Everything heavy (torch, faiss, pydub) is imported lazily inside functions,
-same pattern as voice/stt.py's Whisper load, so a deployment that always has
-Colab available never pays the import/clone/download cost.
+Local (this-machine) fallback for RVC training + conversion, used when the
+Colab server is not configured or unreachable. Training runs as a subprocess
+in an isolated venv; conversion runs in-process.
 """
 
 import glob
@@ -50,26 +28,14 @@ RVC_REPO_DIR   = os.path.join(LOCAL_RVC_DIR, "RVC")
 RVC_REPO_URL   = "https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI"
 RVC_VENV_DIR   = os.path.join(LOCAL_RVC_DIR, "venv")
 
-# Same bundled-ffmpeg PATH fix voice/stt.py applies for itself (rag_env's conda-forge
-# ffmpeg fails to launch on this machine -- STATUS_ENTRYPOINT_NOT_FOUND, a DLL conflict
-# with its dynamically-linked build) -- this module needs it too, for _slice_and_normalize()'s
-# pydub calls, but doesn't import stt.py so never picked it up. Hit this for real: pydub's
-# ffprobe-based AudioSegment.from_file() silently got no output from a broken/missing
-# ffprobe and choked trying to json.loads() the empty result ("Expecting value: line 1
-# column 1 (char 0)").
+# Bundled ffmpeg on PATH, needed by _slice_and_normalize()'s pydub calls
+# (works around a conda-forge ffmpeg launch failure on this machine).
 _BUNDLED_FFMPEG_DIR = os.path.join(BASE_DIR, "bin")
 if os.path.isfile(os.path.join(_BUNDLED_FFMPEG_DIR, "ffmpeg.exe")):
     os.environ["PATH"] = _BUNDLED_FFMPEG_DIR + os.pathsep + os.environ.get("PATH", "")
 
 _HF_BASE = "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main"
-# colab/voice_server.ipynb (cell E) downloads a single hubert_base.pt (fairseq-format
-# checkpoint) -- this repo's current HEAD no longer uses that at all. infer/hubert.py
-# now loads a HuggingFace Transformers-format model directory instead
-# (HubertModelWithFinalProj.from_pretrained(".../assets/hubert_base", local_files_only=True),
-# requiring config.json + preprocessor_config.json + pytorch_model.bin there), confirmed
-# against this repo's own docs/en/README.en.md download instructions:
-#   hf download lj1995/VoiceConversionWebUI --include "hubert_base/*" --local-dir assets
-# ~400MB total across all assets below.
+# Pretrained assets downloaded once on first run; see ensure_set_up().
 ASSETS = {
     os.path.join(RVC_REPO_DIR, "assets", "pretrained_v2", "f0G40k.pth"):        f"{_HF_BASE}/pretrained_v2/f0G40k.pth",
     os.path.join(RVC_REPO_DIR, "assets", "pretrained_v2", "f0D40k.pth"):        f"{_HF_BASE}/pretrained_v2/f0D40k.pth",
@@ -85,117 +51,48 @@ RVC_VERSION         = "v2"
 PITCH_DEFAULT       = 0
 INDEX_RATE_DEFAULT  = 0.75
 PROTECT             = 0.33
-# Small enough that a checkpoint always exists by the time early stopping (below)
-# could plausibly trigger -- with the old value (20) an early stop before epoch 20
-# would have had no checkpoint to build a final model from at all.
-SAVE_EVERY          = 5
-BATCH_SIZE_GPU_HIGH_VRAM = 8   # matches colab/voice_server.ipynb's BATCH_SIZE, tuned for a 16GB T4
-BATCH_SIZE_GPU_LOW_VRAM  = 4   # cards under LOW_VRAM_THRESHOLD_GB (e.g. a 4GB laptop 3050) -- 8 risks CUDA OOM
-LOW_VRAM_THRESHOLD_GB    = 10  # same cutoff colab/voice_server.ipynb's own GPU-check cell warns at
+SAVE_EVERY          = 5      # small enough that a checkpoint exists by the time early stopping can trigger
+BATCH_SIZE_GPU_HIGH_VRAM = 8   # matches colab/voice_server.ipynb, tuned for a 16GB T4
+BATCH_SIZE_GPU_LOW_VRAM  = 4   # cards under LOW_VRAM_THRESHOLD_GB
+LOW_VRAM_THRESHOLD_GB    = 10  # same cutoff colab/voice_server.ipynb's GPU-check cell uses
 BATCH_SIZE_CPU      = 4
 EPOCHS_GPU          = 200    # matches colab/voice_server.ipynb TOTAL_EPOCHS
-EPOCHS_CPU          = 40     # CPU has no realistic path to 200 epochs -- bounded fallback instead
+EPOCHS_CPU          = 40     # bounded fallback; CPU has no realistic path to 200 epochs
 
-# Early stopping (CPU fallback only in practice -- GPU/Colab training is fast enough
-# that EPOCHS_GPU rarely needs cutting short, but the logic isn't device-specific).
-# RVC's generator loss (loss_gen + loss_fm + loss_mel + loss_kl, i.e. train.py's own
-# "loss_gen_all" minus the discriminator's adversarial loss_disc, which reflects the
-# discriminator's own state rather than output quality) is noisy epoch-to-epoch since
-# this is adversarial (GAN) training, not a monotonically-decreasing supervised loss --
-# so patience needs to be generous enough to ride out normal oscillation instead of
-# bailing on a temporary bad epoch:
-#   - EARLY_STOP_MIN_EPOCHS: no stopping before this many epochs -- the first several
-#     epochs are the noisiest (generator and discriminator are still finding balance),
-#     so convergence judgments there are unreliable.
-#   - EARLY_STOP_PATIENCE: 5, not 10 (revised 2026-08-12) -- patience only counts
-#     genuinely fresh loss readings (see the metric_is_fresh fix below), and in
-#     practice a fresh reading only lands roughly every ~25 epochs, not every epoch.
-#     At 10, patience could need up to ~250 epochs' worth of fresh-reading gaps to
-#     exhaust -- past the 200-epoch cap entirely, i.e. early stopping effectively
-#     never fired (confirmed for real: a run sat at loss 35.340 from epoch 51 through
-#     at least epoch 72 with no sign of stopping). 5 was tried and rejected once before
-#     under the *old* per-epoch counting (see git history), but that risk doesn't apply
-#     here: MIN_EPOCHS=15 already skips the noisiest epochs, and each of the 5 patience
-#     "strikes" is itself a real fresh comparison ~25 epochs apart, not 5 consecutive
-#     noisy single epochs -- so 5 fresh non-improving readings is still riding out real
-#     oscillation, just within a cap the run can actually reach.
-#   - EARLY_STOP_MIN_DELTA: minimum loss decrease to count as "improvement" -- without
-#     this, floating-point-noise-sized "improvements" would keep resetting the patience
-#     counter forever.
+# Early-stopping thresholds for the CPU fallback path (GPU/Colab rarely needs
+# cutting short).
 EARLY_STOP_MIN_EPOCHS = 15
 EARLY_STOP_PATIENCE    = 5
 EARLY_STOP_MIN_DELTA   = 0.01
 
-# If train.train produces *no output at all* (not even a single log line) for this
-# long, treat it as hung rather than just slow, and kill it -- hit a real case of this:
-# a run that stayed at 0% GPU utilization indefinitely, never getting far enough to
-# print anything or touch the GPU (a Windows spawn/DataLoader-worker deadlock is the
-# leading suspect, unconfirmed). Without this, a hang left the profile stuck at
-# status='training' forever with no error, silently blocking every future retrain
-# attempt (both the client-facing and manager-dashboard buttons refuse to fire while
-# status=='training') -- this is exactly what happened before this constant existed.
-# 10 minutes is generous enough to cover slow model loading / CUDA warmup on a weak
-# GPU or first-ever CPU run without false-triggering on normal (if slow) progress.
+# Kills a training subprocess that produces no output at all for this long
+# (treated as hung, not slow).
 STALL_TIMEOUT_SEC = 600
 
-# Same stall concern as STALL_TIMEOUT_SEC above, applied to the venv dependency
-# install (ensure_set_up()) -- a plain subprocess.run(..., check=True) with no
-# timeout= blocks forever on a hung pip with no way to notice. Hit this for real:
-# pip sat stuck for 37 minutes (one connection stuck in CLOSE_WAIT) with zero
-# bytes written to site-packages the whole time, no error, just going nowhere.
-# 15 minutes is generous for this file's larger wheels (onnxruntime, opencv,
-# transformers, ...) even on a slow connection, while still failing well before
-# a manager would give up waiting and assume something's broken.
+# Bounds the venv dependency install in ensure_set_up(); a hung pip has no
+# other timeout.
 PIP_INSTALL_TIMEOUT_SEC = 900
 
-# Matches train/train.py's own per-step log line (see its logger.info(f"loss_disc=...
-# loss_gen=... loss_fm=...loss_mel=... loss_kl=...")) -- \s* rather than a fixed space
-# count since that f-string has inconsistent spacing around the commas.
+# Matches train/train.py's own per-step log line.
 _LOSS_LINE_RE = re.compile(
     r"loss_gen=([\d.]+),\s*loss_fm=([\d.]+),\s*loss_mel=([\d.]+),\s*loss_kl=([\d.]+)"
 )
-# train/train.py's per-epoch marker (i18n("====> ...").format(epoch, ...)) -- the
-# "====> " prefix is part of the i18n *key* itself, kept as-is by every locale file
-# checked (including en_US: "====> Epoch: {} {}"), so matching just the prefix reliably
-# detects an epoch boundary regardless of which language train.py's logger is using.
-_EPOCH_MARKER = "====> "
+_EPOCH_MARKER = "====> "  # train/train.py's per-epoch marker, language-independent
 
-# Bounds a single convert_local() call in _convert_with_timeout() below. Was measured
-# (2026-08-13) at 61s wall-clock for a subprocess-per-call invocation of infer/cli.py
-# (interpreter start + torch/CUDA import + CUDA init + loading the .pth/.index from
-# disk each time, on top of ~10s actual inference) -- now that conversion runs
-# in-process with a cached VC() (see convert_local()'s docstring), only the *first*
-# call per speaker (or the very first call in this process) pays anything close to
-# that; a warm call for an already-loaded speaker is well under a second. Kept at the
-# same 150s regardless, since it still has to cover that cold-start case, and callers
-# upstream (station_client.py's speak_timeout) must stay comfortably above this value.
+# Bounds a single convert_local() call (covers a cold VC() load).
 CONVERT_TIMEOUT_SEC = 150
 
-# Serializes both access to the cached _convert_vc/_convert_loaded_speaker state below
-# and the actual inference call -- without this, concurrent /api/speak requests (e.g. a
-# caller retrying because a prior call felt slow) would race on which speaker's weights
-# are currently loaded into the single cached VC(), and fight each other for the one
-# local GPU during inference (confirmed for real, back when this ran as a subprocess
-# per call: 4 infer.cli processes for the same speaker running at once, each taking far
-# longer than running alone would). A single GPU has no real parallelism to offer here
-# anyway, so queuing calls one at a time is strictly better than letting them contend.
+# Serializes cached-VC() access across concurrent /api/speak calls (single
+# local GPU, no real parallelism to offer).
 _convert_lock = threading.Lock()
 
-# Set once, lazily, by _prepare_rvc_import() -- see its docstring.
-_rvc_import_ready = False
-
-# The cached in-process VC() instance + which speaker's weights it currently has
-# loaded, both guarded by _convert_lock. None until the first convert_local() call
-# actually needs them.
-_convert_vc = None
-_convert_loaded_speaker = None
+_rvc_import_ready = False        # set once, lazily, by _prepare_rvc_import()
+_convert_vc = None                # cached in-process VC() instance
+_convert_loaded_speaker = None    # which speaker's weights _convert_vc currently has loaded
 
 
 def device() -> str:
-    """"cuda:0" if this machine has a usable GPU, else "cpu" -- the same
-    detection Whisper already does internally in voice/stt.py, made explicit
-    here since the RVC scripts (unlike whisper.load_model) need the device
-    string passed in explicitly at several points."""
+    """"cuda:0" if this machine has a usable GPU, else "cpu"."""
     import torch
     return "cuda:0" if torch.cuda.is_available() else "cpu"
 
@@ -218,8 +115,7 @@ def _batch_size_for_device() -> int:
 
 def is_set_up() -> bool:
     """True if the RVC repo, its isolated training venv, and the pretrained
-    assets are already present locally (no network access needed, no download
-    triggered)."""
+    assets are already present locally (no network access needed)."""
     return (os.path.isdir(RVC_REPO_DIR) and os.path.exists(_venv_python())
             and all(os.path.exists(p) for p in ASSETS))
 
@@ -230,27 +126,8 @@ def _venv_python() -> str:
     return os.path.join(RVC_VENV_DIR, "bin", "python")
 
 
-# The cloned repo's own requirements files (requirments_{cpu,cu118,cu128}_py312.txt)
-# are written for the full Gradio 3.14 webui + UVR5 vocal-separation tool -- ~40
-# packages including gradio/fastapi/pydantic/onnxruntime/opencv/torch-directml/etc.
-# Installing that whole file is what kept failing: a hash mismatch against its
-# default Chinese mirror, then repeated network stalls on its largest wheels
-# (onnxruntime, opencv, ...) even from official PyPI. None of that is actually
-# needed -- an AST scan of every module the 5 training scripts we call actually
-# import (train/preprocess.py, train/dataset/extract_f0.py,
-# train/dataset/extract_hubert_feature.py, train/train.py, train/train_index.py,
-# and their own local imports: train/data_utils.py, train/losses.py,
-# train/mel_processing.py, train/process_ckpt.py, train/utils.py,
-# train/dataset/slicer2.py, infer/hubert.py, infer/audio.py, infer/module/*,
-# i18n/i18n.py, tools/*, configs/config.py) found only these third-party packages
-# beyond what rag_env's own torch/numpy/scipy/librosa/soundfile/faiss already
-# provide via --system-site-packages:
-#   av, ffmpeg-python, matplotlib, praat-parselmouth, scikit-learn, transformers,
-#   and tensorboard (train.py does `from torch.utils.tensorboard import
-#   SummaryWriter` -- needs the standalone tensorboard package even though the
-#   import statement starts with "torch.").
-# Installing exactly these, from official PyPI, sidesteps every failure mode
-# above at once rather than chasing them one at a time.
+# Minimal set of packages the training scripts actually need beyond what
+# rag_env's own torch/numpy/scipy/librosa/soundfile/faiss already provide.
 TRAINING_PACKAGES = [
     "av", "ffmpeg-python", "matplotlib", "praat-parselmouth",
     "scikit-learn", "tensorboard", "transformers",
@@ -261,19 +138,11 @@ SETUP_LOCK_TIMEOUT_SEC = 1800  # generous -- a legitimate first-run setup can it
 
 
 def _acquire_setup_lock(report) -> int:
-    """Cross-process mutex around ensure_set_up()'s repo-clone/venv-build/asset-
-    download sequence. Needed because two run_training() calls for the same (or
-    even different) speaker can genuinely happen concurrently -- e.g. a manager
-    clicking retrain while an earlier attempt is still running -- and without
-    this, both processes share the same on-disk local_rvc/ directory tree with
-    no coordination. Hit this for real: one process's rebuild (rmtree, since its
-    deps marker didn't match) deleted the venv while another process's pip
-    install was actively mid-download inside it, corrupting both runs at once.
-
-    Returns an open file descriptor to release via _release_setup_lock() when
-    done. A stale lock (owner crashed/was killed without cleaning up) is
-    reclaimed after SETUP_LOCK_TIMEOUT_SEC rather than blocking forever.
-    """
+    """Cross-process mutex around ensure_set_up()'s repo-clone/venv-build/
+    asset-download sequence, so two concurrent setup attempts can't corrupt
+    the shared local_rvc/ directory. Returns an fd to release via
+    _release_setup_lock(). A stale lock is reclaimed after
+    SETUP_LOCK_TIMEOUT_SEC rather than blocking forever."""
     os.makedirs(LOCAL_RVC_DIR, exist_ok=True)
     lock_path = os.path.join(LOCAL_RVC_DIR, ".setup.lock")
     waited = 0
@@ -287,7 +156,7 @@ def _acquire_setup_lock(report) -> int:
             try:
                 age = time.time() - os.path.getmtime(lock_path)
             except OSError:
-                age = SETUP_LOCK_TIMEOUT_SEC + 1  # lock vanished mid-check -- treat as stale, retry the open
+                age = SETUP_LOCK_TIMEOUT_SEC + 1
             if age > SETUP_LOCK_TIMEOUT_SEC:
                 try:
                     os.remove(lock_path)
@@ -319,32 +188,11 @@ def _release_setup_lock(fd: int):
 
 
 def ensure_set_up(progress_cb=None):
-    """Clones RVC-Project's WebUI repo, builds an isolated venv for it, and
-    downloads the pretrained assets training needs (same source as
-    colab/voice_server.ipynb cells C/E). Only does what's missing, so it's
-    cheap to call before every local train/convert attempt once everything is
-    already in place. Raises on failure (network, git, disk space, or a pip
-    install failure) -- callers should treat that as "local fallback
-    unavailable right now".
-
-    The venv is required for TRAINING because this repo's own full
-    requirements files (fastapi<0.100, pydantic<2, starlette<0.28, a Gradio
-    3.14 webui -- none of which we actually use) directly conflict with
-    clone-voice-station's own FastAPI stack; installing them into this
-    process's environment would downgrade/break the running app, so training
-    subprocesses always use _venv_python() instead of sys.executable, and
-    only TRAINING_PACKAGES (below) -- never the repo's own requirements files
-    -- get installed into it. CONVERSION doesn't need any of that: it only
-    imports infer/vc/modules.py's VC (see convert_local()), which never
-    touches fastapi/pydantic/gradio, so it runs directly in this process
-    instead (see convert_local()'s docstring) -- this function still has to
-    run first for it too, though, since it's what clones the repo and
-    downloads the pretrained assets both paths need.
-
-    Serialized across processes via _acquire_setup_lock() -- see its docstring
-    for why (a real corruption from two concurrent callers racing on the same
-    on-disk venv).
-    """
+    """Clones RVC-Project's WebUI repo, builds an isolated venv for training,
+    and downloads the pretrained assets. Only does what's missing. Raises on
+    failure -- callers should treat that as "local fallback unavailable".
+    Training needs its own venv (dependency conflicts with this app's own
+    FastAPI stack); conversion runs directly in this process instead."""
     import urllib.request
 
     def report(msg):
@@ -368,26 +216,16 @@ def _ensure_set_up_locked(report):
         subprocess.run(["git", "clone", "--depth=1", RVC_REPO_URL, RVC_REPO_DIR],
                        check=True, timeout=PIP_INSTALL_TIMEOUT_SEC)
 
-    # Tracked inside the venv dir itself (not the repo dir) so a previous attempt
-    # that cloned the repo but died mid pip-install doesn't get permanently skipped
-    # on retry just because the repo folder already exists. No longer needs a
-    # variant suffix: with --system-site-packages (below), the venv always sees
-    # whatever torch build rag_env currently has live, automatically -- there's no
-    # separate torch install to fall out of sync with GPU/CPU status anymore, so a
-    # rebuild is never needed just because this process gained/lost CUDA.
+    # Marker lives in the venv dir so a previous attempt that cloned but died
+    # mid pip-install doesn't get skipped just because the repo folder exists.
     deps_marker = os.path.join(RVC_VENV_DIR, ".deps_installed")
     if not os.path.exists(deps_marker):
         if os.path.isdir(RVC_VENV_DIR):
             shutil.rmtree(RVC_VENV_DIR, ignore_errors=True)
         report("Creating isolated venv for RVC training (first run only)…")
-        # --system-site-packages: lets the venv see this process's own already-installed
-        # packages (torch above all) instead of needing its own separate copy -- avoids
-        # downloading a second, redundant torch+torchaudio pair (~2-3GB) when this
-        # process's own torch (rag_env's) is already confirmed working. Packages the
-        # venv installs itself (below) still shadow/override the system ones for
-        # anything run inside the venv, so the conflicting pins this venv exists to
-        # isolate (fastapi<0.100, pydantic<2, gradio, etc. -- see ensure_set_up's
-        # docstring) still can't leak into or downgrade rag_env's own FastAPI stack.
+        # --system-site-packages: reuses this process's own torch instead of a
+        # second ~2-3GB download; packages installed into the venv below still
+        # take priority for anything run inside it.
         subprocess.run([sys.executable, "-m", "venv", "--system-site-packages", RVC_VENV_DIR],
                        check=True, timeout=120)
 
@@ -397,29 +235,12 @@ def _ensure_set_up_locked(report):
             subprocess.run(
                 [_venv_python(), "-m", "pip", "install", "-q",
                  "--index-url", "https://pypi.org/simple",
-                 # pip's default socket timeout (15s) is too short for these wheels over
-                 # a plain PyPI download -- hit a real ReadTimeoutError on
-                 # files.pythonhosted.org mid-download. --retries adds resilience
-                 # against otherwise-transient drops on top of the longer timeout.
                  "--timeout", "120", "--retries", "5",
-                 # A stalled install here has needed a hard kill more than once (see
-                 # PIP_INSTALL_TIMEOUT_SEC/STALL_TIMEOUT_SEC) -- killing pip mid-write
-                 # can leave a truncated file in its local cache, which a *later*
-                 # attempt then reuses and flags as a hash mismatch ("may have been
-                 # tampered with") even though nothing external is actually wrong.
-                 # Hit exactly this. --no-cache-dir avoids reusing anything from a
-                 # previous, possibly-interrupted run.
                  "--no-cache-dir",
                  *TRAINING_PACKAGES],
                 check=True, timeout=PIP_INSTALL_TIMEOUT_SEC,
             )
         except subprocess.TimeoutExpired:
-            # --timeout/--retries above only bound individual socket reads, not the
-            # whole command -- hit a real case of this too: pip sat for 37 minutes
-            # with a connection stuck in CLOSE_WAIT and zero bytes written to
-            # site-packages the entire time, no error, just silently going nowhere.
-            # subprocess.run's own timeout= is the only thing that bounds the full
-            # invocation.
             raise RuntimeError(
                 f"pip install stalled for over {PIP_INSTALL_TIMEOUT_SEC // 60} minutes with no "
                 f"progress (not a normal slow-but-working download) and was killed."
@@ -427,11 +248,8 @@ def _ensure_set_up_locked(report):
         open(deps_marker, "w").close()
         report("Training dependencies installed.")
 
-    # faiss-cpu needs to be in *this* process's site-packages, not just installed
-    # somewhere -- the venv is --system-site-packages (inherits from here), and
-    # infer/cli.py (convert_local() above) needs faiss itself for the
-    # retrieval-index blend at inference time, same as train/train_index.py does
-    # for training.
+    # Needed in this process's own site-packages, not just the venv's --
+    # convert_local() (in-process) also needs faiss for the index blend.
     try:
         import faiss  # noqa: F401
     except ImportError:
@@ -448,10 +266,9 @@ def _ensure_set_up_locked(report):
 
 
 def _model_paths(speaker_id: str) -> tuple[str, str]:
-    # Same voice_storage/<speaker_id>/<speaker_id>.{pth,index} layout
-    # engine/voice_engine.py's _download_and_store_model() already uses for the
-    # Colab-trained backup copy, so a locally-trained model is indistinguishable
-    # from a downloaded one to every other caller.
+    """Same voice_storage/<speaker_id>/ layout engine/voice_engine.py uses
+    for Colab-trained models, so a local model is indistinguishable to
+    every other caller."""
     model_dir = os.path.join(VOICE_MODELS_DIR, speaker_id)
     return os.path.join(model_dir, f"{speaker_id}.pth"), os.path.join(model_dir, f"{speaker_id}.index")
 
@@ -462,49 +279,16 @@ def has_local_model(speaker_id: str) -> bool:
 
 
 def _prepare_rvc_import():
-    """Makes the cloned RVC repo importable from *this* process (adds it to
-    sys.path, points its weight_root/index_root/outside_index_root/rmvpe_root
-    env vars at absolute paths) and chdir()s into it -- once, lazily, the
-    first time convert_local() actually needs it. Idempotent.
-
-    Deliberately does NOT `import infer.cli` (the module the old subprocess-
-    per-call version below used to shell out to) to get any of this: reading
-    it shows it does its own `os.chdir(PROJECT_ROOT)` as an *import-time* side
-    effect, which was harmless when it only ever ran inside local_rvc_server.py
-    -- a whole separate process dedicated to nothing else -- but would silently
-    chdir this entire app.py process (and everything else running in it) the
-    moment something merely imported it for its create_config() helper. So the
-    small pieces actually needed (this function, _create_rvc_config() below)
-    are reimplemented directly against configs/config.py and infer/vc/modules.py
-    instead, with the chdir happening explicitly, once, right here -- not as a
-    surprise side effect of an unrelated import.
-
-    The chdir itself is still necessary despite everything else in this app
-    resolving its own paths from BASE_DIR/__file__ (confirmed by reading
-    app.py, database/database.py, and every voice/*.py and engine/*.py module
-    that touches the filesystem): i18n/i18n.py's I18nAuto loads its locale
-    file from a bare cwd-relative path ("./i18n/locale/<lang>.json"), and
-    infer/vc/modules.py imports I18nAuto at module load time -- without the
-    right cwd, that raises FileNotFoundError the first time a VC() is built.
-    """
+    """Makes the cloned RVC repo importable from this process and chdir()s
+    into it, once, lazily. Idempotent. Reimplements the small pieces of
+    infer/cli.py needed instead of importing it directly, and imports
+    sklearn/pandas/faiss/torch in a fixed order first (avoids a native-
+    extension import-order crash on Windows)."""
     global _rvc_import_ready
     if _rvc_import_ready:
         return
 
-    # Windows-only heap-corruption guard -- confirmed for real: letting
-    # infer/vc/pipeline.py's own imports (faiss, librosa -> transitively
-    # scikit-learn -> pandas) be what first pulls scikit-learn/pandas's native
-    # extensions into this process crashed the whole interpreter hard (no
-    # catchable Python exception -- "Windows fatal exception: code 0xc0000374",
-    # i.e. STATUS_HEAP_CORRUPTION) partway through importing zoneinfo for
-    # pandas, deep inside CPython's own import machinery. Reproducibly fixed
-    # by importing these four here ourselves first, in this order, before
-    # anything RVC-side gets a chance to import them in whatever order its own
-    # module graph happens to produce -- some mismatch in *that* ordering
-    # between the DLLs these packages carry (OpenMP/MKL-style native math
-    # runtimes, the usual suspect for this exact crash signature) is the
-    # leading theory, though the precise DLL conflict wasn't pinned down
-    # further since this ordering reliably avoids it.
+    # Fixed import order avoids a native-extension crash on Windows.
     import sklearn  # noqa: F401
     import pandas  # noqa: F401
     import faiss  # noqa: F401
@@ -521,13 +305,8 @@ def _prepare_rvc_import():
 
 
 def _create_rvc_config():
-    """Reimplements infer/cli.py's create_config() (without importing that
-    module -- see _prepare_rvc_import()'s docstring for why): configs/config.py's
-    Config.arg_parse() calls argparse.parse_args() with no explicit argv, i.e.
-    it parses *this process's own* sys.argv by default. Swapped out for a bare
-    argv for the duration of the call so app.py's real command-line arguments
-    (whatever they happen to be) can't collide with RVC's own unrelated
-    --port/--pycmd/--colab/... parser."""
+    """Builds a configs.config.Config() without letting its internal
+    argparse.parse_args() see this process's own sys.argv."""
     from configs.config import Config
 
     original_argv = sys.argv[:]
@@ -540,7 +319,7 @@ def _create_rvc_config():
 
 def _get_convert_vc():
     """Returns the cached in-process VC() instance, building it on first use.
-    Caller must already hold _convert_lock. See convert_local()'s docstring."""
+    Caller must already hold _convert_lock."""
     global _convert_vc
     if _convert_vc is None:
         _prepare_rvc_import()
@@ -554,16 +333,10 @@ def _get_convert_vc():
 
 def _convert_with_timeout(pth_path: str, index_path: str, in_path: str,
                            pitch: int, index_rate: float):
-    """Runs the actual (locked, cached) VC.vc_single() call on a background
-    thread and waits on it with a bound, so a hang here (bad checkpoint,
-    driver-level GPU issue, ...) can't block the calling request forever --
-    the closest in-process equivalent of the old subprocess.run(timeout=...)
-    below, now that there's no child process to hard-kill on timeout. If it
-    does time out, the wait here gives up and reports failure, but the
-    background thread (and the lock it's holding) are left running until the
-    call genuinely finishes -- same as a slow-but-live subprocess would have
-    kept _convert_lock held for its actual duration.
-    """
+    """Runs the cached VC.vc_single() call on a background thread with a
+    wait bound, so a hang can't block the caller forever. On timeout the
+    background thread (and its lock) keep running until it actually
+    finishes."""
     result_box = queue.Queue(maxsize=1)
 
     def _worker():
@@ -592,40 +365,12 @@ def _convert_with_timeout(pth_path: str, index_path: str, in_path: str,
 
 def convert_local(audio_bytes: bytes, speaker_id: str, pitch: int = None,
                    index_rate: float = None, mime: str = "audio/mp3") -> bytes | None:
-    """
-    Runs voice conversion using the speaker's locally-available model
-    (voice_storage/<speaker_id>/ -- either downloaded from Colab after a prior
-    remote train, or produced by train_speaker_local() below).
-
-    Originally used the rvc-python PyPI package's in-process RVCInference, but
-    that requires fairseq==0.12.2, which cannot even be imported on Python 3.12
-    -- a hard language-level break, not a missing-package problem: fairseq's
-    dataclass definitions use a mutable-default pattern
-    ("field: SomeDataclass = SomeDataclass()") that Python 3.11+'s dataclasses
-    module now correctly rejects at class-definition time. No amount of pip
-    installing works around that. Then used infer/cli.py (in the cloned repo,
-    run as a subprocess inside the training venv) instead, the same
-    fairseq-free pipeline (Transformers-based HuBERT, see infer/hubert.py)
-    training already used -- correct, but slow: a fresh interpreter, fresh
-    CUDA init, and a fresh model load from disk on every single call, and (the
-    original motivation for this rewrite) it needed running as a separate
-    process/port (local_rvc_server.py, now retired) to get in-process caching
-    at all, since app.py's own process couldn't import the RVC repo directly
-    without conflicting with its own FastAPI stack -- see ensure_set_up()'s
-    docstring for why that conflict turned out not to actually apply to
-    conversion (only to training).
-
-    Now imports infer/vc/modules.py's VC directly and keeps one instance
-    cached in this process for its whole lifetime (see _get_convert_vc()) --
-    HuBERT/RMVPE stay resident in memory across calls; only the (small)
-    per-speaker net_g weights get reloaded, and only when the requested
-    speaker actually changes from the previous call. _convert_with_timeout()
-    bounds each call so a hang can't block the calling request forever.
-
-    Returns None if no local model is available, or on any failure -- callers
-    (voice/rvc_client.py) should treat that the same as "Colab unreachable and
-    no local model either": fall back to unconverted TTS audio.
-    """
+    """Runs voice conversion using the speaker's locally-available model
+    (downloaded from Colab, or trained locally by train_speaker_local()).
+    Keeps one VC() instance cached in-process for its whole lifetime (see
+    _get_convert_vc()); only per-speaker weights reload on a speaker change.
+    Returns None if no local model is available or on any failure --
+    callers should fall back to unconverted TTS audio."""
     if not has_local_model(speaker_id):
         return None
     try:
@@ -696,51 +441,33 @@ def _slice_and_normalize(src: str, out_dir: str, sr: int, min_ms: int = 3000, ma
 
 
 def _run_step(cmd, label, cwd):
+    """Runs a training subprocess step; raises with both stdout and stderr
+    tails, since some of these scripts log failures to stdout only."""
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
-        # These scripts often catch their own exceptions and log a "[X][Failed] ..."
-        # line to stdout (or a log file) instead of letting a traceback hit stderr --
-        # hit this for real (extract_hubert_feature.py's "Model not found" case
-        # printed nothing to stderr at all) -- so surface both, not just stderr.
         detail = (result.stdout[-1000:] + "\n" + result.stderr[-1000:]).strip()
         raise RuntimeError(f"{label} failed (exit {result.returncode}):\n{detail}")
     return result.stdout
 
 
 def _write_train_config(exp_dir: str):
-    """train/utils.py's get_hparams() does
-    `json.loads(read_text(os.path.join(experiment_dir, "config.json")))` with no
-    fallback -- FileNotFoundError if it's missing. webui.py's click_train() writes
-    this itself (copying a template from configs/) before ever invoking train.py;
-    since we call train.train directly, we have to do the same. v2/40k.json doesn't
-    exist in this repo (only v1/{32k,40k,48k} and v2/{32k,48k}) -- v1/40k.json is
-    the correct template regardless of RVC_VERSION, matching webui.py's own
-    "if version == 'v1' or sr == '40k': use v1" selection (SAMPLE_RATE is fixed at
-    40k here, so this is always that case)."""
+    """Writes config.json into the experiment dir, which train.utils.get_hparams()
+    requires with no fallback. v1/40k.json is the correct template for
+    SAMPLE_RATE=40k regardless of RVC_VERSION."""
     src = os.path.join(RVC_REPO_DIR, "configs", "v1", "40k.json")
     shutil.copy2(src, os.path.join(exp_dir, "config.json"))
 
 
 def _run_training_with_early_stop(venv_python: str, exp_dir: str, speaker_id: str,
                                     batch_size: int, epochs: int, report) -> int:
-    """
-    Runs train/train.py, watching its live output so training can stop early once
-    the generator loss (loss_gen + loss_fm + loss_mel + loss_kl -- train.py's own
-    "loss_gen_all" minus the discriminator's own adversarial loss_disc, which
-    reflects the discriminator's state rather than output quality) hasn't improved
-    for EARLY_STOP_PATIENCE epochs, instead of always running the full epoch count.
-    See the EARLY_STOP_* constants above for why the numbers are what they are.
-
-    Returns the last epoch number actually reached (< epochs if stopped early).
-    Raises RuntimeError if the subprocess fails for a reason other than our own
-    early-stop termination.
-    """
-    # -c 1 (if_cache_data_in_gpu) loads the whole dataset into VRAM once instead of
-    # transferring a fresh batch from CPU every step -- on a small personal-voice
-    # dataset (a few minutes of audio, a few dozen segments) this comfortably fits
-    # even on a 4GB card, and removes the main reason GPU utilization stays low on
-    # a workload this size (CPU-side data loading becoming the bottleneck between
-    # kernel launches). Left at 0 on CPU, where there's no CPU<->GPU transfer to cache.
+    """Runs train/train.py, watching its live output so training can stop
+    early once the generator loss hasn't improved for EARLY_STOP_PATIENCE
+    fresh readings, instead of always running the full epoch count. Returns
+    the last epoch reached (< epochs if stopped early). Raises RuntimeError
+    on a subprocess failure that isn't our own early-stop termination."""
+    # -c 1 caches the whole dataset in VRAM once (small personal-voice
+    # datasets fit even on 4GB cards); left at 0 on CPU where there's no
+    # transfer to cache.
     cache_in_gpu = "1" if is_gpu() else "0"
     proc = subprocess.Popen([
         venv_python, "-m", "train.train",
@@ -751,12 +478,8 @@ def _run_training_with_early_stop(venv_python: str, exp_dir: str, speaker_id: st
         "-l", "1", "-c", cache_in_gpu, "-sw", "0", "-v", RVC_VERSION,
     ], cwd=RVC_REPO_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
 
-    # `for line in proc.stdout` blocks with no timeout, so a hung child (rather than a
-    # crashed one) would block this forever with no way to notice -- hit this for real:
-    # a run that sat at 0% GPU utilization indefinitely, never printing a single line.
-    # Reading on a background thread and pulling from a queue with a timeout is the
-    # standard way to get a timeout on a blocking pipe read in Python (no cross-platform
-    # way to put a timeout directly on the read itself).
+    # Reading proc.stdout directly blocks with no timeout; pump it on a
+    # background thread through a queue so STALL_TIMEOUT_SEC can apply.
     lines = queue.Queue()
 
     def _pump():
@@ -801,26 +524,11 @@ def _run_training_with_early_stop(venv_python: str, exp_dir: str, speaker_id: st
                 continue
 
             epoch += 1
-            # train.py logs a loss line every train.log_interval *steps* (200 by
-            # default), not every epoch -- on a small personal-voice dataset (a few
-            # dozen segments, ~14 steps/epoch here) a fresh reading can be 10+ epochs
-            # apart. Evaluating improve/no-improve on every epoch regardless (the
-            # earlier version of this code) meant no_improve was really counting
-            # "epochs since the last log line", not "epochs since the last real
-            # non-improvement" -- hit this for real: patience=10 combined with a
-            # ~14-epoch gap between readings triggered an early stop at epoch 17
-            # after the *same* stale loss value got re-evaluated 11 times in a row.
-            # Only counting epochs with a genuinely fresh reading fixes that.
+            # Only a fresh loss reading counts toward patience (evaluating
+            # every epoch double-counted stale readings).
             if metric_is_fresh:
                 last_epoch = epoch
                 if epoch < EARLY_STOP_MIN_EPOCHS:
-                    # Readings before MIN_EPOCHS don't touch best_metric/no_improve at all --
-                    # not just "can't trigger a stop yet" but "never counted as a strike" --
-                    # so a few noisy non-improving early readings can't pre-load patience and
-                    # cause an immediate stop the instant epoch crosses MIN_EPOCHS with no real
-                    # post-MIN_EPOCHS evaluation. The first eligible reading (epoch >=
-                    # MIN_EPOCHS) becomes the baseline "best" fresh, same as if training started
-                    # there.
                     report(f"Epoch {epoch}/{epochs} — loss {last_metric:.3f} "
                            f"(before epoch {EARLY_STOP_MIN_EPOCHS} -- not yet counted toward early stop)")
                 else:
@@ -833,11 +541,6 @@ def _run_training_with_early_stop(venv_python: str, exp_dir: str, speaker_id: st
                            f"{no_improve}/{EARLY_STOP_PATIENCE} without improvement)")
                 metric_is_fresh = False
             elif last_metric is not None:
-                # last_epoch (not best_epoch) here -- last_metric is the most recent fresh
-                # reading, which isn't the best one once a non-improving reading comes in
-                # (e.g. a 39.174 reading at epoch 76 after a 35.340 best @ epoch 51 previously
-                # showed the misleading "last: 39.174 @ epoch 51", pairing a later value with
-                # an earlier, unrelated epoch number).
                 report(f"Epoch {epoch}/{epochs} — no new loss reading yet "
                        f"(last: {last_metric:.3f} @ epoch {last_epoch})")
 
@@ -868,14 +571,9 @@ def _run_training_with_early_stop(venv_python: str, exp_dir: str, speaker_id: st
 
 
 def _finalize_from_checkpoint(venv_python: str, exp_dir: str, speaker_id: str, epoch_reached: int):
-    """
-    Builds assets/weights/<speaker_id>.pth from the latest raw training checkpoint
-    when early stopping cut the run short. train/train.py's own savee() call (see
-    train/process_ckpt.py) only fires once epoch >= the full -te target, which an
-    early-stopped run never reaches, so we have to reproduce that step ourselves.
-    Runs inside the training venv (not this process) since it needs the same
-    torch/train.* imports training itself used.
-    """
+    """Builds the final .pth from the latest raw checkpoint when early
+    stopping cut the run short (train.py's own save step only fires at the
+    full epoch target). Runs inside the training venv."""
     g_checkpoints = sorted(glob.glob(os.path.join(exp_dir, "G_*.pth")),
                             key=os.path.getmtime, reverse=True)
     if not g_checkpoints:
@@ -897,38 +595,17 @@ print("SAVEE_RESULT:", result)
     if result.returncode != 0:
         raise RuntimeError(f"Finalizing early-stopped model crashed:\n{result.stderr[-1500:]}")
     if "Traceback" in result.stdout:
-        # savee() catches its own exceptions and returns the traceback as a string
-        # rather than raising -- see train/process_ckpt.py.
         raise RuntimeError(f"savee() failed while finalizing early-stopped model:\n{result.stdout[-1500:]}")
 
 
 def train_speaker_local(speaker_id: str, sample_files: list, progress_cb=None) -> tuple[str, str]:
-    """
-    Full local training pipeline for one speaker: slice/normalize -> preprocess
-    -> F0 -> HuBERT features -> train RVC v2 -> FAISS index -> save into
-    voice_storage/<speaker_id>/.
-
-    Calls the same underlying scripts webui.py itself shells out to (confirmed
-    by reading its run_preprocess_dataset/run_extract_f0_feature/click_train/
-    run_train_index functions directly, since the upstream repo was restructured
-    at some point after colab/voice_server.ipynb was written -- the old flat
-    trainset_preprocess_pipeline_print.py/extract_f0_print.py/
-    extract_feature_print.py/train.py no longer exist; they moved to
-    train/preprocess.py, train/dataset/extract_f0.py,
-    train/dataset/extract_hubert_feature.py, train/train.py, with a new
-    train/train_index.py replacing the hand-rolled FAISS step this function
-    used to do itself). All run inside the isolated venv from ensure_set_up(),
-    not this process's own interpreter.
-
-    sample_files: list of (filename, bytes) tuples -- same shape
-    engine/voice_engine.py already builds from list_voice_samples() for the
-    Colab path, so callers don't need a separate local variant.
-
-    Raises RuntimeError (or lets a subprocess CalledProcessError propagate) on
-    failure -- the caller (engine/voice_engine.py's run_training) is
-    responsible for turning that into a "failed" profile status, same as it
-    already does for a failed Colab job.
-    """
+    """Full local training pipeline for one speaker: slice/normalize ->
+    preprocess -> F0 -> HuBERT features -> train RVC v2 -> FAISS index ->
+    save into voice_storage/<speaker_id>/. Runs the same scripts webui.py
+    itself shells out to, inside the isolated venv from ensure_set_up().
+    sample_files: list of (filename, bytes) tuples. Raises RuntimeError (or
+    lets a subprocess error propagate) on failure -- the caller turns that
+    into a "failed" profile status."""
     def report(msg):
         logger.info(f"[RVC-local][{speaker_id}] {msg}")
         if progress_cb:
@@ -953,12 +630,6 @@ def train_speaker_local(speaker_id: str, sample_files: list, progress_cb=None) -
         os.makedirs(sliced_dir, exist_ok=True)
         exp_dir = os.path.join(RVC_REPO_DIR, "logs", speaker_id)  # full path -- preprocess/extract_* want this
         os.makedirs(exp_dir, exist_ok=True)
-        # savee() (train/process_ckpt.py) writes to the hardcoded relative path
-        # "assets/weights/<name>.pth" and doesn't create its parent dir -- this repo
-        # doesn't ship that folder, so without this a fresh clone fails here on *any*
-        # completed run, not just an early-stopped one (hit this for real: it broke
-        # the early-stop finalize path first, but train.train's own internal savee()
-        # call on natural completion would hit the exact same error).
         os.makedirs(os.path.join(RVC_REPO_DIR, "assets", "weights"), exist_ok=True)
 
         report("Slicing & normalizing samples…")
@@ -976,22 +647,13 @@ def train_speaker_local(speaker_id: str, sample_files: list, progress_cb=None) -
 
         report("Preprocessing…")
         n_p = min(4, os.cpu_count() or 4)
-        # Invoked as "-m train.preprocess", NOT "train/preprocess.py" -- running it as
-        # a bare file path puts the script's own directory (.../RVC/train) at the front
-        # of sys.path, which collides with the sibling file train/train.py (also named
-        # "train"): "from train.dataset.slicer2 import Slicer" then resolves "train" to
-        # that *file* instead of the package, and train.py's own "from train import
-        # utils" recurses into itself -> circular-import crash (hit this for real on a
-        # live run). "-m" puts cwd (=RVC_REPO_DIR) on sys.path instead, matching how
-        # webui.py itself resolves these same imports when it's the process entry point.
+        # Must run as "-m train.preprocess", not a bare file path (a bare
+        # path causes a circular import against train.py).
         _run_step([venv_python, "-m", "train.preprocess",
                    sliced_dir, str(SAMPLE_RATE), str(n_p), exp_dir, "False", "3.7"],
                   "Preprocessing", cwd=RVC_REPO_DIR)
 
         report("Extracting F0 (RMVPE)…")
-        # "cpu" mode regardless of dev: webui.py itself only uses the cuda-parallel
-        # form when a specific gpu list is configured for rmvpe; its own default
-        # (no such config) is this same single-process cpu path.
         _run_step([venv_python, "-m", "train.dataset.extract_f0",
                    "cpu", exp_dir, str(n_p), F0_METHOD],
                   "F0 extraction", cwd=RVC_REPO_DIR)
@@ -1022,10 +684,6 @@ def train_speaker_local(speaker_id: str, sample_files: list, progress_cb=None) -
             fh.write("\n".join(lines))
         report(f"Filelist: {len(lines)} entries.")
 
-        # train/utils.py's get_hparams() unconditionally reads {exp_dir}/config.json
-        # with no fallback -- normally written by webui.py's own click_train() before
-        # it invokes train.py, a step this port has to replicate since train.train is
-        # called directly here.
         _write_train_config(exp_dir)
 
         report(f"Training up to {epochs} epochs on {dev} "
@@ -1043,10 +701,8 @@ def train_speaker_local(speaker_id: str, sample_files: list, progress_cb=None) -
                    speaker_id, RVC_VERSION, outside_index_root, str(n_cpu), "single"],
                   "Index training", cwd=RVC_REPO_DIR)
 
-        # train/train.py only saves the finished model to assets/weights/<name>.pth
-        # (see train/process_ckpt.py's savee()) when it reaches the full -te epoch
-        # target -- an early-stopped run never gets there, so build it ourselves from
-        # the last raw checkpoint in that case.
+        # train.py only writes assets/weights/<name>.pth at the full epoch
+        # target; an early-stopped run needs it built explicitly.
         trained_pth = os.path.join(RVC_REPO_DIR, "assets", "weights", f"{speaker_id}.pth")
         if not os.path.exists(trained_pth):
             report("Building final model from the last checkpoint (early-stopped run)…")

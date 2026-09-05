@@ -3,37 +3,24 @@ voice/stt.py
 Speech-to-Text using PhoWhisper (VinAI's Vietnamese fine-tune of Whisper) —
 the input half of this service's voice loop (the output half is voice/tts.py
 + voice/rvc_client.py). A client app posts recorded microphone audio to
-POST /api/transcribe (see app.py) and gets back plain text to feed into its
-own assistant as a normal text query — this module never touches the
-client's RAG/LLM pipeline.
+POST /api/transcribe and gets back plain text; this module never touches
+the client's RAG/LLM pipeline.
 
-This is the LAST-RESORT fallback in /api/transcribe's chain (published/
-default Tier 2 adapter -> Colab-hosted PhoWhisper-large -> here), reached
-only when both of those are unavailable -- so it deliberately uses the
-*small* PhoWhisper checkpoint, not -large: it has to run acceptably on this
-host's CPU with no GPU guaranteed, and small is meaningfully lighter while
-still being the same Vietnamese-tuned family as the Colab primary path,
-instead of generic multilingual openai-whisper (used here until this was
-changed) which measurably underperforms PhoWhisper on Vietnamese speech (see
-thesis pilot results: PhoWhisper-large 11.7% WER vs local Whisper-small
-21.2% WER on identical audio) -- every fallback step should still be
-Vietnamese-tuned, just progressively smaller/faster.
+This is the LAST-RESORT fallback in /api/transcribe's chain (published Tier
+2 adapter -> Colab-hosted PhoWhisper-large -> here). It uses the *small*
+checkpoint, not -large, since it has to run acceptably on CPU with no GPU
+guaranteed -- still Vietnamese-tuned rather than generic multilingual
+openai-whisper, which measurably underperforms PhoWhisper on Vietnamese.
 
-Loaded via transformers (WhisperForConditionalGeneration + WhisperProcessor),
-not the openai-whisper package -- same HF model class stt_adapter_infer.py
-already uses for Tier 2 LoRA inference, so this shares that decoding
-approach (beam search + anti-repetition kwargs) instead of introducing a
-second, differently-behaved Whisper stack. transformers/torch are already
-hard dependencies (Tier 2 adapters, resemblyzer). Decoding non-.wav audio
-(webm/ogg/m4a/mp3, the formats a browser's MediaRecorder produces) goes
-through librosa, same as stt_adapter_infer.py -- no ffmpeg subprocess shell-
-out here, sidestepping the conda-forge ffmpeg DLL crash entirely rather than
-working around it.
+Loaded via transformers (WhisperForConditionalGeneration + WhisperProcessor)
+rather than the openai-whisper package, matching stt_adapter_infer.py's Tier
+2 LoRA inference so both share the same decoding approach. Non-.wav audio
+(webm/ogg/m4a/mp3) is decoded via librosa, same as stt_adapter_infer.py, to
+avoid an ffmpeg subprocess shell-out.
 
-Only Vietnamese is supported (PhoWhisper is Vietnamese-only) -- the
-`language` parameter is accepted for interface parity with the other
-transcribe() implementations this can be swapped with, but ignored, same as
-clone_voice_client.local_stt's transcribe_with_lora().
+Only Vietnamese is supported (PhoWhisper is Vietnamese-only) -- `language`
+is accepted for interface parity with the other transcribe()
+implementations this can be swapped with, but ignored.
 """
 
 import os
@@ -45,12 +32,9 @@ from engine.server_log import get_logger
 logger = get_logger()
 
 # Bundled static ffmpeg (see bin/, gitignored) -- librosa's audioread
-# fallback still shells out to ffmpeg for non-.wav browser recordings
-# (webm/ogg/m4a/mp3), same as stt_adapter_infer.py's own copy of this block.
-# The conda-forge ffmpeg package in rag_env fails to launch on this machine
-# (STATUS_ENTRYPOINT_NOT_FOUND, a DLL conflict with its dynamically-linked
-# build); this static build sidesteps that. Falls back to PATH's ffmpeg if
-# the bundled binary isn't present (e.g. a different deployment).
+# fallback shells out to ffmpeg for non-.wav recordings; works around a
+# conda-forge ffmpeg launch failure on this machine. Falls back to PATH's
+# ffmpeg if the bundled binary isn't present.
 _BUNDLED_FFMPEG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin")
 if os.path.isfile(os.path.join(_BUNDLED_FFMPEG_DIR, "ffmpeg.exe")):
     os.environ["PATH"] = _BUNDLED_FFMPEG_DIR + os.pathsep + os.environ.get("PATH", "")

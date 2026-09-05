@@ -90,12 +90,8 @@ def manager_logged_in(request: Request) -> bool:
     return bool(request.session.get("manager"))
 
 
-# CSRF: the dashboard's session cookie defaults to Starlette's SameSite=Lax, which
-# already blocks the browser from attaching it to most cross-site state-changing
-# requests — this token is defense-in-depth on top of that, checked here (the one
-# dependency every /manager/* route already uses) rather than per-route, and only
-# for methods that actually change state. Login mints it into the session (see
-# login_submit); dashboard.html echoes it back on every fetch() via the api() helper.
+# CSRF defense-in-depth on top of SameSite=Lax, checked once here rather
+# than per-route.
 CSRF_HEADER = "X-CSRF-Token"
 _CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -110,12 +106,7 @@ def require_manager(request: Request):
     return request.session["manager"]
 
 
-# Login rate limiting: in-process only (a single-worker deployment, matching this
-# service's thesis scale) — tracks recent failed attempts per (scope, IP) and locks
-# out further tries for a cooldown window. `scope` keeps the manager dashboard's
-# counter separate from the STT Lab guest counter(s) sharing this same dict. A
-# multi-worker/multi-instance deployment would need a shared store (e.g. Redis)
-# instead of this module-level dict.
+# In-process login rate limiting (single-worker deployment).
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_LOCKOUT_SEC  = 300  # 5 minutes
 _failed_logins: dict[str, list[float]] = {}
@@ -241,13 +232,8 @@ async def login_submit(request: Request, username: str = Form(...), password: st
         )
 
     _failed_logins.pop(f"manager:{ip}", None)
-    # Clear any leftover STT Lab guest identity from this same browser session (added
-    # 2026-08-12) -- manager and guest identity live in the same session cookie, so
-    # without this, a manager who'd separately logged into /stt-lab as some guest
-    # earlier in this browser would still resolve as that guest on /stt-lab after
-    # also logging in here, i.e. the manager dashboard "leaking into" a specific
-    # guest's own page. Manager oversight of guest adapters already has its own path
-    # (/manager/stt, require_manager) that doesn't need this coexistence.
+    # Clear any leftover STT Lab guest identity sharing this session cookie
+    # (manager and guest identity share one cookie).
     request.session.pop("stt_guest_id", None)
     request.session.pop("stt_guest_username", None)
     request.session.pop("stt_csrf_token", None)
@@ -553,12 +539,8 @@ async def manager_delete_profile_route(profile_id: int, request: Request, manage
 
 
 # ── Manager dashboard: voice realism test ───────────────────────────────────────
-# Lets the manager judge how close a trained clone actually sounds to the end
-# user's own recordings — synthesizes a test clip through the real playback
-# pipeline (base TTS -> RVC) and scores it against the profile's uploaded
-# samples via resemblyzer speaker-embedding cosine similarity (see
-# engine/realism_engine.py). Manager-only: this plays back an end user's raw
-# voice recordings, not just metadata about them.
+# Manager-only: scores a trained clone against the end user's own samples via
+# speaker-embedding cosine similarity (engine/realism_engine.py).
 @app.get("/manager/profiles/{profile_id}/samples")
 async def manager_list_samples_route(profile_id: int, manager: str = Depends(require_manager)):
     profile = get_voice_profile(profile_id)
@@ -651,10 +633,8 @@ async def create_profile_route(request: Request, client: dict = Depends(require_
             detail=f"Đã có tối đa {MAX_CLONED_VOICES_PER_USER} giọng nói riêng. Vui lòng xoá một giọng nói cũ trước."
         )
 
-    # Optional: which TTS voice the answer is synthesised from before RVC re-voices
-    # it. Left unset this falls back to BUILTIN_VOICES[0], a female voice, which
-    # means a male target speaker is produced by cross-gender conversion on every
-    # request -- audibly worse than starting from a same-gender base.
+    # Base voice for synthesis before RVC re-voices (unset falls back to a
+    # female default -- see database.BUILTIN_VOICES).
     base_tts_voice = (data.get("base_tts_voice") or "").strip() or None
     if base_tts_voice and base_tts_voice not in VALID_BASE_TTS_VOICES:
         raise HTTPException(status_code=400, detail=f"base_tts_voice không hợp lệ: {base_tts_voice}")
@@ -1308,15 +1288,8 @@ async def delete_stt_account_route(request: Request, guest_id: int = Depends(req
 
 
 # ── Manager: STT Tier 2 training + publish-to-client ────────────────────────
-# Mirrors the guest STT Lab routes above (same underlying database.py functions,
-# same engine/stt_train_engine.py training path, same _reject_if_training/
-# _clean_hotwords/_delete_stt_adapter_files helpers) but scoped to require_manager
-# instead of a guest's own ownership -- a manager can touch ANY adapter (own or
-# any guest's), and additionally publish one as a client's active production
-# model for /api/transcribe (see that route below). Kept as separate routes
-# under /manager/stt/* rather than widening the guest routes' auth, so a guest's
-# own self-serve capability and a manager's global one stay independently
-# reasoned about, same split /manager/profiles/* already uses for RVC voices.
+# Mirrors the guest STT Lab routes above, scoped to require_manager instead
+# of guest ownership.
 def _get_stt_adapter_or_404(adapter_id: int) -> dict:
     adapter = get_stt_adapter(adapter_id)
     if not adapter:

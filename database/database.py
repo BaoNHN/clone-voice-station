@@ -39,42 +39,16 @@ MAX_CLONED_VOICES_PER_USER = 2
 MAX_HOTWORDS_PER_ADAPTER = 200
 MAX_HOTWORD_LEN = 80
 
-# STT Lab Tier 2 (LoRA fine-tune) — this page has no API key gate (guests
-# self-register), so these caps matter more than the equivalent RVC ones:
-# real GPU training time is at stake, not just metadata storage.
-# Raised from 5: measured directly (see tools/import_hf_stt_dataset.py's medical-
-# consultation experiment) that a handful of clips next to Whisper's own pretraining
-# corpus (hundreds of thousands of hours) can only overfit, not meaningfully adapt --
-# voice/stt_local_train.py's validation gate would just reject these every time anyway,
-# wasting real GPU time on a run that was never going to ship. Below this, Tier 1's
-# hotword prompt-bias (update_stt_adapter_hotwords) is the right tool instead: biasing
-# a few proper nouns/terms needs no training data minimum at all.
+# STT Lab Tier 2 (LoRA fine-tune) training-data bounds.
 MIN_STT_TRAIN_SAMPLES = 10
-# Raised from 50: a guest who registers an account is training their own adapter with
-# their own uploaded data, not an anonymous drive-by request, so the old "few personal
-# hotwords" ceiling was mainly just capping quality for domain-adaptation use cases (e.g.
-# tools/import_hf_stt_dataset.py importing a real ASR dataset) without a corresponding
-# abuse benefit. 500 covers a full-size dataset split (this dataset's train split is 460
-# rows) with headroom, while MAX_STT_ADAPTERS_PER_GUEST below still bounds how many such
-# training runs one guest can rack up.
 MAX_STT_TRAIN_SAMPLES = 500
 MAX_STT_SAMPLE_DURATION_SEC = 30
 MAX_STT_ADAPTERS_PER_GUEST = 3
-# First entry is the default (app.py falls back to ALLOWED_STT_BASE_MODELS[0] when a
-# caller doesn't specify base_model). phowhisper-small (vinai/PhoWhisper-small, ~244M
-# params) is Vietnamese-tuned unlike the generic whisper-tiny/whisper-base -- promoted to
-# default 2026-08-13 to match voice/stt.py's local inference fallback also switching to
-# PhoWhisper. Meaningfully bigger than tiny/base though: local (this-machine) training's
-# ~4GB VRAM budget (see voice/stt_local_train.py) is tighter for this one than for
-# tiny/base -- failure mode is a clean CUDA OOM that fails the training job (existing
-# error handling), not a corrupted adapter, so it's safe to offer, just more likely to
-# need the Colab backend instead of Local on constrained hardware.
+# First entry is the default base model.
 ALLOWED_STT_BASE_MODELS = ("phowhisper-small", "whisper-tiny", "whisper-base")
 
-# First client seeded on a fresh DB — matches the app this service was extracted from
-# (D:\hoc\project\rag-legal-assistant). Named to match the lowercase-hyphen convention
-# used by the other real client, "voice-lab-example" -- renamed 2026-08-12 from the
-# earlier display-style "Voice Rag example" (see the rename migration in init_db()).
+# First client seeded on a fresh DB, matching the app this service was
+# extracted from.
 DEFAULT_CLIENT_NAME = "voice-rag-example"
 
 # Default account for the manager dashboard, seeded on first init only.
@@ -84,12 +58,8 @@ PBKDF2_ITERATIONS = 200_000
 
 
 def get_conn():
-    # timeout=30 (up from sqlite3's 5s default): confirmed for real that background
-    # training jobs (STT LoRA fine-tuning, RVC status polling) hold their own write
-    # connections open from a separate thread (BackgroundTasks/asyncio.to_thread)
-    # while a concurrent request -- e.g. tools/import_hf_stt_dataset.py's
-    # create_stt_adapter() call -- opens another, hitting "database is locked" at
-    # the default timeout. See init_db()'s WAL pragma for the other half of this fix.
+    # timeout=30 (up from sqlite3's 5s default) avoids "database is locked"
+    # under concurrent writers; see init_db()'s WAL pragma for the other half.
     return sqlite3.connect(DB_NAME, timeout=30)
 
 
@@ -116,10 +86,8 @@ def _verify_password(password: str, stored: str) -> bool:
 # =========================
 def init_db():
     conn = get_conn()
-    # WAL mode is stored in the database file itself (persists across connections/
-    # restarts once set), so this only needs to run once here -- lets concurrent
-    # readers proceed without blocking on an in-progress writer, the other half of
-    # the "database is locked" fix alongside get_conn()'s longer busy timeout.
+    # WAL mode persists in the DB file once set; lets readers proceed without
+    # blocking on a writer.
     conn.execute("PRAGMA journal_mode=WAL")
     c    = conn.cursor()
 
@@ -183,12 +151,8 @@ def init_db():
         )
     """)
 
-    # Fired when a MANAGER (not the end user themselves, not a client app's own
-    # admin) deletes or disables a cloned voice — so the end user can be told
-    # why their voice stopped working. Delivered primarily via each client's
-    # registered webhook_url (see clients.webhook_url); `delivered_at` stays
-    # NULL until that POST succeeds, so GET /api/notifications can serve any
-    # still-undelivered ones as a polling fallback.
+    # Manager-triggered delete/disable events, delivered via webhook or polled
+    # via GET /api/notifications while delivered_at is NULL.
     c.execute("""
         CREATE TABLE IF NOT EXISTS notifications (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,11 +199,8 @@ def init_db():
             created_at    REAL
         )
     """)
-    # Self-publish (added 2026-08-12): each guest gets their own dedicated `clients`
-    # row, auto-provisioned at registration (see _provision_stt_guest_client /
-    # create_stt_guest below) -- so a guest can publish an adapter live for their own
-    # traffic without a manager assigning a client first, while never being able to
-    # target a real production client (e.g. DEFAULT_CLIENT_NAME) themselves.
+    # Each guest gets a dedicated clients row (see _provision_stt_guest_client),
+    # so they can self-publish without a manager assigning a client first.
     try:
         c.execute("ALTER TABLE stt_guests ADD COLUMN client_id INTEGER")
     except Exception:
@@ -269,21 +230,12 @@ def init_db():
         "ALTER TABLE stt_adapters ADD COLUMN adapter_path TEXT",
         "ALTER TABLE stt_adapters ADD COLUMN resume_from_path TEXT",
         "ALTER TABLE stt_adapters ADD COLUMN backend_used TEXT",
-        # Manager-published adapters (added 2026-08-12): guest_id stays NULL for
-        # these (they're created by a manager, not a self-serve guest -- see
-        # app.py's /manager/stt/adapters routes). client_id is which client app's
-        # /api/transcribe calls should use this adapter; is_published gates that
-        # -- an adapter can be trained/tested without affecting production traffic
-        # until a manager explicitly publishes it. At most one published adapter
-        # per client_id at a time (enforced in publish_stt_adapter() below, not a
-        # DB constraint, same pattern as voice_profiles.is_default).
+        # client_id: which client's /api/transcribe should use this adapter.
+        # is_published gates that, at most one per client_id (see publish_stt_adapter()).
         "ALTER TABLE stt_adapters ADD COLUMN client_id INTEGER",
         "ALTER TABLE stt_adapters ADD COLUMN is_published INTEGER DEFAULT 0",
-        # Global default adapter (added 2026-08-12): a manager can designate one
-        # ready adapter as the system-wide fallback for ANY client that has no
-        # adapter of its own published -- independent of client_id/is_published,
-        # which only ever target one specific client. See set_default_stt_adapter()/
-        # get_default_stt_adapter() below and /api/transcribe's fallback chain.
+        # System-wide fallback adapter for any client with none published; see
+        # get_default_stt_adapter().
         "ALTER TABLE stt_adapters ADD COLUMN is_default INTEGER DEFAULT 0",
     ):
         try:
@@ -303,10 +255,8 @@ def init_db():
             is_holdout     INTEGER DEFAULT 0
         )
     """)
-    # Migration for existing DBs missing is_holdout (added 2026-08-12 -- marks a sample as
-    # a genuinely independent test set, e.g. a HuggingFace dataset's own official "test"
-    # split, never trained on -- see voice/stt_local_train.py's train() holdout_samples
-    # param and its module docstring's "UPDATE" note).
+    # is_holdout marks a sample as part of a genuinely independent test set
+    # (see voice/stt_local_train.py's train() holdout_samples param).
     try:
         c.execute("ALTER TABLE stt_training_samples ADD COLUMN is_holdout INTEGER DEFAULT 0")
     except Exception:
@@ -329,11 +279,8 @@ def init_db():
         )
     conn.commit()
 
-    # One-time rename (added 2026-08-12): the default client was originally seeded as
-    # "Voice Rag example" (display-style); renamed to match the lowercase-hyphen
-    # convention DEFAULT_CLIENT_NAME now uses. Renaming in place (not delete+reseed)
-    # keeps the same id/api_key, so rag-legal-assistant's already-configured key keeps
-    # working. No-op once the row is already named DEFAULT_CLIENT_NAME.
+    # One-time rename from the old display-style default client name; keeps
+    # the same id/api_key so already-configured clients keep working.
     c.execute("UPDATE clients SET name=? WHERE name=?", (DEFAULT_CLIENT_NAME, "Voice Rag example"))
     if c.rowcount:
         conn.commit()
@@ -366,9 +313,7 @@ def init_db():
         print(f"[clone-voice-station] Seeded manager account — username: {DEFAULT_MANAGER_USERNAME}  password: {password}")
         print(f"[clone-voice-station] Log in at http://127.0.0.1:8090/login and change this password.")
 
-    # Backfill client_id for STT Lab guests registered before self-publish existed --
-    # auto-provisions a dedicated client per guest, same as new registrations get via
-    # create_stt_guest(), so every guest can self-publish without waiting on a manager.
+    # Backfill client_id for guests registered before self-publish existed.
     orphan_guests = c.execute("SELECT id, username FROM stt_guests WHERE client_id IS NULL").fetchall()
     for guest_id, username in orphan_guests:
         try:
@@ -379,21 +324,9 @@ def init_db():
         except Exception as e:
             print(f"[clone-voice-station] Failed to backfill client for STT guest '{username}' (id={guest_id}): {e}")
 
-    # Recover training rows orphaned by a server crash/restart (added 2026-08-12).
-    # Both RVC voice cloning (voice/rvc_local.py) and STT Tier 2 fine-tuning run their
-    # training loop on a background thread inside *this* process -- there is no
-    # separate worker and no resume-on-startup, so if the process dies mid-training
-    # (crash, power loss, manual restart) the row is left at status='training' forever
-    # with nothing left actually training it. The dashboards disable "Huấn luyện lại"/
-    # retrain while status='training' (see dashboard.html's canRetrain, manager_stt.html/
-    # stt_guest_dashboard.html's `locked`), so an orphaned row was previously stuck with
-    # no way to retrain short of editing the DB by hand. Flipping orphans to 'error' here
-    # on every startup unlocks that button again; progress_message is left untouched so
-    # the last real progress (e.g. "Epoch 169/200 ...") stays visible for diagnosis.
-    # Names are user-entered (often Vietnamese) and Windows' default console/file
-    # codepage can't encode them -- print() with a raw name here has actually crashed
-    # this startup path before (UnicodeEncodeError on cp1252), which would turn "one
-    # orphaned row" into "server won't start at all". Keep these print()s ASCII-only.
+    # Recover training rows orphaned by a server crash/restart: flips any row
+    # stuck at status='training' to 'error' so its retrain button unlocks
+    # again. Names printed here stay ASCII-only (Windows console encoding).
     orphaned_profiles = c.execute(
         "SELECT id FROM voice_profiles WHERE status='training'"
     ).fetchall()
@@ -536,17 +469,10 @@ def _provision_stt_guest_client(username: str) -> int:
 
 
 def create_stt_guest(username: str, password: str) -> int:
-    """Raises sqlite3.IntegrityError if username is already taken — the
-    caller (app.py) turns that into a 409.
-
-    Confirmed for real: without the try/finally, that expected IntegrityError
-    (thrown by the INSERT itself, on every registration attempt for a name
-    that's already taken) skipped conn.close() entirely, leaking an open
-    connection holding an unresolved transaction -- which then blocked every
-    other write against this SQLite database (WAL mode still only allows one
-    writer at a time) until the leaking process was killed. finally guarantees
-    the connection closes (rolling back the failed INSERT) whether or not it
-    raises."""
+    """Raises sqlite3.IntegrityError if username is already taken (app.py
+    turns that into a 409). try/finally ensures the connection always closes
+    even on that error, avoiding a leaked open transaction that would
+    otherwise block every other write to this DB."""
     conn = get_conn()
     try:
         c = conn.cursor()
@@ -1052,12 +978,8 @@ def rename_voice_profile(profile_id: int, name: str):
     conn.close()
 
 
-# Base voices a cloned profile may be built on. RVC re-voices whatever the base
-# TTS engine produced, so the base is not cosmetic: converting across a gender
-# boundary (a male target speaker synthesised from a female base voice, which is
-# what BUILTIN_VOICES[0] gives) audibly costs naturalness and speaker similarity
-# compared with starting from a same-gender base. Restricted to the known list
-# rather than accepting any string, since the value is handed to edge-TTS.
+# Base voices a cloned profile may be built on. Restricted to the known list
+# since the value is handed straight to edge-TTS.
 VALID_BASE_TTS_VOICES = {voice_id for _, voice_id in BUILTIN_VOICES}
 
 

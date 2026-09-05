@@ -37,39 +37,26 @@ from engine.server_log import get_logger
 
 logger = get_logger()
 
-# Bundled static ffmpeg (see bin/, gitignored) — same requirement/workaround as
-# voice/stt.py: the conda-forge ffmpeg in rag_env fails to launch on this machine
-# (STATUS_ENTRYPOINT_NOT_FOUND), which made pydub silently skip writing the
-# AI-disclosure watermark tag in _add_ai_disclosure() below (pydub logs "Couldn't
-# find ffmpeg or avconv" and falls back to a no-op exporter that drops tags).
-# Falls back to PATH's ffmpeg if the bundled binary isn't present.
+# Bundled static ffmpeg (see bin/, gitignored); same workaround as voice/stt.py.
 _BUNDLED_FFMPEG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin")
 if os.path.isfile(os.path.join(_BUNDLED_FFMPEG_DIR, "ffmpeg.exe")):
     os.environ["PATH"] = _BUNDLED_FFMPEG_DIR + os.pathsep + os.environ.get("PATH", "")
 
 POLL_INTERVAL_SEC = 15
-# Tolerance for transient network failures while polling (see rvc_client.train_status()'s
-# "network_error" status) before giving up on an otherwise-still-running job -- confirmed
-# for real that heavy GPU training work on the Colab VM can make cloudflared itself briefly
-# unresponsive well within a single poll's own timeout, unrelated to whether training is
-# actually still progressing. 20 * POLL_INTERVAL_SEC = 5 minutes of sustained
-# unreachability, comfortably past what a compute-load blip has been observed to cause,
-# while still giving up in finite time if the Colab session is genuinely gone for good.
+# Tolerance for transient network failures while polling before giving up on
+# an otherwise-still-running job (20 * POLL_INTERVAL_SEC = 5 min).
 MAX_CONSECUTIVE_NETWORK_ERRORS = 20
 MAX_TRAIN_WAIT_SEC = 2 * 60 * 60  # 2 hours
 
-# Vietnam's AI Law (134/2025/QH15) requires that audio simulating/impersonating a real
-# person's voice carry a voice notice at the beginning identifying it as AI-generated.
-# Only applies to actual RVC-cloned output — plain builtin TTS voices (HoaiMy, NamMinh,
-# Jenny) aren't modeled on any specific real identifiable person, so they're out of scope.
-# The clip is cached per base voice (module-level, process lifetime): fixed text, same
-# TTS engine already used for the real answer, so there's nothing to regenerate per call.
+# Required by Vietnam's AI Law (134/2025/QH15) for RVC-cloned output only
+# (not plain builtin TTS voices). Cached per base voice for the process
+# lifetime.
 AI_DISCLOSURE_TEXT_VI = (
     "Nội dung sau đây là giọng nói được tạo ra bởi trí tuệ nhân tạo, không phải giọng nói thật."
 )
-# Metadata-level provenance tag embedded in the output WAV, same class of approach as
-# C2PA content credentials for images — not a robust/steganographic audio watermark,
-# but a good-faith implementation of the law's watermark requirement for a prototype.
+# Metadata-level provenance tag, same class of approach as C2PA content
+# credentials for images -- not a robust/steganographic watermark (see
+# thesis Section 5.2/7.1 for that limitation stated explicitly).
 WATERMARK_TAG = "AI-generated / voice-converted audio - clone-voice-station RVC pipeline"
 
 _disclosure_cache = {}
@@ -91,12 +78,8 @@ async def _add_ai_disclosure(rvc_wav: bytes, base_voice: str) -> bytes:
     combined   = disclosure + AudioSegment.silent(duration=350) + content
 
     buf = io.BytesIO()
-    # codec must be passed explicitly -- pydub's export() silently takes an
-    # "easy_wav" shortcut (raw wave-module write, no ffmpeg invocation at all)
-    # whenever format="wav" and codec is None, which skips tags entirely
-    # regardless of tags= being set. pcm_s16le is WAV's own native encoding, so
-    # this changes nothing about the audio -- it only forces the ffmpeg path
-    # that actually writes the -metadata comment tag below.
+    # codec must be explicit or pydub silently skips the ffmpeg path (and
+    # the tag with it, via its "easy_wav" raw-write shortcut).
     combined.export(buf, format="wav", codec="pcm_s16le", tags={"comment": WATERMARK_TAG})
     return buf.getvalue()
 
@@ -169,9 +152,8 @@ def run_training(profile_id: int, min_samples: int):
         _poll_until_done(profile_id, speaker_id)
         return
 
-    # Colab unset/unreachable/errored -- train on this machine's own GPU/CPU instead
-    # (see voice/rvc_local.py). Unlike the Colab path, this runs synchronously right
-    # here (already inside the BackgroundTasks thread) rather than via queue + poll.
+    # Colab unset/unreachable -- fall back to local training (voice/rvc_local.py),
+    # synchronously in this same background thread.
     logger.info(f"[Voice] Colab unavailable for {speaker_id} ({result.get('message')}) — training locally.")
     update_voice_profile_status(
         profile_id, "training", speaker_id=speaker_id,

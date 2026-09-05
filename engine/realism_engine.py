@@ -1,22 +1,18 @@
 """
 engine/realism_engine.py
-Manager-only "realism test" (see app.py POST /manager/profiles/{id}/realism_test):
-synthesizes a test clip through the SAME pipeline real users hear (base TTS ->
-RVC conversion, see voice_engine.speak_text), then scores how close that clip
-sounds to the profile owner's own uploaded samples using resemblyzer's
-pretrained speaker-embedding encoder — the standard speaker-verification
-technique (cosine similarity between d-vectors), not a subjective listen.
+Manager-only "realism test": synthesizes a test clip through the SAME
+pipeline real users hear (base TTS -> RVC conversion), then scores how
+close it sounds to the profile owner's own uploaded samples using
+resemblyzer's pretrained speaker-embedding encoder (cosine similarity
+between d-vectors, the standard speaker-verification technique).
 
-resemblyzer pulls in torch — a real dependency this service didn't previously
-have — so the encoder is lazy-loaded on first use rather than at import time,
-keeping normal app.py startup fast for the (common) case this feature is
-never used in a given process lifetime.
+The encoder is lazy-loaded on first use, not at import time, since
+resemblyzer pulls in torch and this feature isn't used in most process
+lifetimes.
 
-Decoding non-WAV original samples (.mp3/.webm/.ogg/.m4a — see app.py's
-upload_sample_route) goes through librosa, which needs an `ffmpeg` binary on
-PATH for anything other than .wav. The synthesized test clip itself is always
-WAV (RVC's /convert always returns WAV, see rvc_client.convert), so that half
-never needs ffmpeg.
+Decoding non-WAV original samples (.mp3/.webm/.ogg/.m4a) goes through
+librosa, which needs `ffmpeg` on PATH. The synthesized test clip is always
+WAV (RVC's /convert always returns WAV), so that half never needs ffmpeg.
 """
 
 import base64
@@ -110,11 +106,9 @@ async def run_realism_test(profile: dict, samples: list, text: str = "") -> dict
     if not profile.get("speaker_id"):
         raise RuntimeError("Giọng nói này chưa có speaker_id (chưa huấn luyện xong).")
 
-    # 1. Synthesize through the real playback pipeline: base TTS -> RVC convert.
-    # Both rvc_client.convert() and the resemblyzer/librosa embedding calls below are
-    # blocking (HTTP round-trip / CPU-bound audio decode) -- offload them so a manager
-    # running this test doesn't stall every other concurrent request (e.g. real users'
-    # /api/speak calls) for the duration, same reasoning as voice_engine.speak_text().
+    # Synthesize through the real playback pipeline: base TTS -> RVC convert.
+    # Offloaded to a thread (like voice_engine.speak_text()) so this blocking
+    # HTTP/CPU work doesn't stall concurrent requests.
     base_voice = profile.get("base_tts_voice") or tts.DEFAULT_VOICE
     tts_audio, base_mime = await tts.synthesize(text, voice=base_voice)
     synth_audio = await asyncio.to_thread(rvc_client.convert, tts_audio, profile["speaker_id"], mime=base_mime)
@@ -124,7 +118,7 @@ async def run_realism_test(profile: dict, samples: list, text: str = "") -> dict
             "— không có bản ghi giọng nhân bản để so sánh."
         )
 
-    # 2. Embed the synthesized clip + every original sample.
+    # Embed the synthesized clip + every original sample.
     synth_embed = await asyncio.to_thread(_embed_audio_bytes, synth_audio)
 
     sample_scores = []
@@ -145,10 +139,8 @@ async def run_realism_test(profile: dict, samples: list, text: str = "") -> dict
     if not embeddings:
         raise RuntimeError("Không đọc được file mẫu ghi âm nào (định dạng không hỗ trợ hoặc file hỏng).")
 
-    # Overall score = similarity to the CENTROID of the user's own samples —
-    # more stable than averaging per-sample pair scores, and matches the usual
-    # speaker-verification pattern of comparing an utterance against a
-    # speaker's full enrolled embedding rather than one reference clip at a time.
+    # Score against the CENTROID of the user's own samples, not an average of
+    # per-sample scores -- matches the usual speaker-verification pattern.
     centroid = np.mean(embeddings, axis=0)
     overall_score = round(max(0.0, _cosine_similarity(synth_embed, centroid)) * 100, 1)
 

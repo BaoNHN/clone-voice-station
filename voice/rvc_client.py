@@ -34,15 +34,7 @@ from database.database import get_setting
 # after that, whatever's stored in `settings` (editable via the manager
 # dashboard) always wins. See get_pitch()/get_index_rate()/get_timeout().
 _DEFAULTS = {
-    # 20s was tuned for a fast Colab T4 response and was too short for a slow
-    # or cold Colab call in general (a cold call there can legitimately take
-    # well over 20s to reload a model) -- confirmed for real via repeated
-    # "[RVC] Endpoint unreachable ... Read timed out (read timeout=20)" log
-    # lines that were really just slow-but-working Colab responses being
-    # abandoned early and falling through to the slower local fallback (see
-    # voice/rvc_local.py's CONVERT_TIMEOUT_SEC, which bounds that fallback
-    # separately). 150s matches that same margin and is harmless for a
-    # fast-and-working Colab response too (just never abandons it early).
+    # 150s covers a cold Colab call (can take well over 20s to reload a model).
     "rvc_timeout_convert":    os.getenv("RVC_TIMEOUT_CONVERT", "150"),    # seconds
     "rvc_timeout_short":      os.getenv("RVC_TIMEOUT_SHORT", "5"),        # health/status checks
     "rvc_timeout_download":   os.getenv("RVC_TIMEOUT_DOWNLOAD", "180"),   # trained model can be 50-150MB
@@ -169,14 +161,9 @@ def start_train(speaker_id: str, samples: list) -> dict:
         return {"status": "error", "message": f"Không kết nối được tới Colab: {e}"}
 
 
-# Cloudflare's own edge error codes for a tunnel that's up but not currently answering
-# (origin/cloudflared unresponsive) -- confirmed for real: a live training run got HTTP 530
-# ("Cloudflare Tunnel error 1033") back from a poll a few minutes after entering the heavy
-# GPU training phase, while training kept running on Colab regardless. Unlike a genuine
-# app-level error (Flask itself returning 400/404/500), these come from Cloudflare's edge
-# *instead of* reaching our server at all, so they get the same "still might be running,
-# don't give up immediately" leniency as a network-level RequestException below, not the
-# immediate-failure treatment a real HTTP error from our own app gets.
+# Cloudflare's own edge error codes for a tunnel that's up but not currently
+# answering (origin/cloudflared unresponsive, not our app returning an error).
+# Treated as a transient network issue, not an immediate failure.
 _CLOUDFLARE_TUNNEL_ERROR_CODES = {502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530}
 
 
@@ -193,14 +180,9 @@ def train_status(speaker_id: str) -> dict:
             return {"status": "network_error", "message": f"Cloudflare Tunnel error (HTTP {resp.status_code})"}
         return {"status": "error", "message": f"HTTP {resp.status_code}"}
     except requests.exceptions.RequestException as e:
-        # Distinct from "error" above -- confirmed for real that a real training run (heavy
-        # GPU work occupying the Colab VM) can make cloudflared itself briefly unresponsive
-        # (a "Cloudflare Tunnel error 1033" page instead of a response) well within this
-        # call's own 5s timeout, even though training keeps running on Colab regardless of
-        # whether this one poll got through. _poll_until_done() tolerates a run of these
-        # before giving up; "error" (a real HTTP response, just not 200) and "unavailable"
-        # (no endpoint configured at all) still fail immediately, same as before -- only a
-        # network-level failure to even reach the endpoint gets this leniency.
+        # network_error (not "error"): a poll failing to even reach the
+        # endpoint is tolerated by _poll_until_done(); training may still be
+        # running on Colab regardless of one dropped poll.
         return {"status": "network_error", "message": str(e)}
 
 
