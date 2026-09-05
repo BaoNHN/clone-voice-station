@@ -1052,6 +1052,30 @@ def rename_voice_profile(profile_id: int, name: str):
     conn.close()
 
 
+# Base voices a cloned profile may be built on. RVC re-voices whatever the base
+# TTS engine produced, so the base is not cosmetic: converting across a gender
+# boundary (a male target speaker synthesised from a female base voice, which is
+# what BUILTIN_VOICES[0] gives) audibly costs naturalness and speaker similarity
+# compared with starting from a same-gender base. Restricted to the known list
+# rather than accepting any string, since the value is handed to edge-TTS.
+VALID_BASE_TTS_VOICES = {voice_id for _, voice_id in BUILTIN_VOICES}
+
+
+def set_voice_profile_base_voice(profile_id: int, base_tts_voice: str):
+    """Changes which TTS voice a profile is synthesised from before RVC runs.
+
+    Takes effect on the next /api/speak call; the trained RVC model itself is
+    unaffected, so switching base voices needs no retraining.
+    """
+    if base_tts_voice not in VALID_BASE_TTS_VOICES:
+        raise ValueError(f"unknown base_tts_voice: {base_tts_voice!r}")
+    conn = get_conn()
+    c    = conn.cursor()
+    c.execute("UPDATE voice_profiles SET base_tts_voice=? WHERE id=?", (base_tts_voice, profile_id))
+    conn.commit()
+    conn.close()
+
+
 def set_default_voice_profile(client_id: int, external_user_id: str, profile_id: int):
     """Unsets any previous default for this end user, then sets the given profile as default.
     A built-in voice can also be set default per-user via a synthetic row lookup — callers

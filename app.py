@@ -26,6 +26,7 @@ from database.database import (
     list_voice_profiles, get_voice_profile, create_voice_profile,
     count_cloned_voice_profiles,
     rename_voice_profile, set_default_voice_profile, delete_voice_profile,
+    set_voice_profile_base_voice, VALID_BASE_TTS_VOICES,
     update_voice_profile_status,
     add_voice_sample, list_voice_samples, delete_voice_sample,
     list_all_voice_profiles, list_all_voice_profiles_global,
@@ -650,7 +651,15 @@ async def create_profile_route(request: Request, client: dict = Depends(require_
             detail=f"Đã có tối đa {MAX_CLONED_VOICES_PER_USER} giọng nói riêng. Vui lòng xoá một giọng nói cũ trước."
         )
 
-    profile_id = create_voice_profile(client["id"], external_user_id, name)
+    # Optional: which TTS voice the answer is synthesised from before RVC re-voices
+    # it. Left unset this falls back to BUILTIN_VOICES[0], a female voice, which
+    # means a male target speaker is produced by cross-gender conversion on every
+    # request -- audibly worse than starting from a same-gender base.
+    base_tts_voice = (data.get("base_tts_voice") or "").strip() or None
+    if base_tts_voice and base_tts_voice not in VALID_BASE_TTS_VOICES:
+        raise HTTPException(status_code=400, detail=f"base_tts_voice không hợp lệ: {base_tts_voice}")
+
+    profile_id = create_voice_profile(client["id"], external_user_id, name, base_tts_voice)
     return {"status": "ok", "profile_id": profile_id}
 
 
@@ -671,6 +680,14 @@ async def update_profile_route(profile_id: int, request: Request, client: dict =
         name = (data.get("name") or "").strip()
         if name:
             rename_voice_profile(profile_id, name)
+    # Only a cloned profile has a meaningful base voice: a builtin profile IS its
+    # base voice, so letting a caller rewrite that would redefine the shared voice
+    # for every user of this client.
+    if "base_tts_voice" in data and is_own_cloned:
+        base_tts_voice = (data.get("base_tts_voice") or "").strip()
+        if base_tts_voice not in VALID_BASE_TTS_VOICES:
+            raise HTTPException(status_code=400, detail=f"base_tts_voice không hợp lệ: {base_tts_voice}")
+        set_voice_profile_base_voice(profile_id, base_tts_voice)
     if data.get("is_default"):
         set_default_voice_profile(client["id"], external_user_id, profile_id)
 
