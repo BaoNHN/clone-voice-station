@@ -1,18 +1,13 @@
 """
 engine/server_log.py
-Central logging so the manager dashboard can show "what happened in the system"
-(GET /manager/logs, see app.py + templates/dashboard.html) instead of requiring
-someone to be watching the raw terminal -- which is what prompted this: repeated
-back-and-forth pasting terminal output just to diagnose a stuck training run.
+Central logging so the manager dashboard can show "what happened in the
+system" (GET /manager/logs) instead of requiring someone to watch the raw
+terminal.
 
-Deliberately scoped to this app's own events (training progress, Colab/local
-fallback decisions, errors) via a single named logger, not the process's full
-stdout/stderr or uvicorn's own request-access logs -- those are noisy (every
-poll request) and not what a manager actually wants from a page titled "what
-happened". get_logger() replaces the print() calls that used to scatter this
-same information across engine/voice_engine.py, voice/rvc_client.py,
-voice/rvc_local.py and voice/stt.py, console-only and gone once the terminal
-scrolled past.
+Scoped to this app's own events (training progress, Colab/local fallback
+decisions, errors) via a single named logger, not the process's full
+stdout/stderr or uvicorn's own request-access logs -- those are noisy and
+not what a manager wants from a page titled "what happened".
 """
 
 import logging
@@ -44,11 +39,9 @@ def _configure_once():
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
-    # A dedicated named logger, not the root logger -- keeps this independent of
-    # uvicorn's own logging config (which reconfigures the root/uvicorn.* loggers
-    # when uvicorn.run() starts) so there's no import-order dependency to get
-    # wrong, and propagate=False keeps our lines from also going through any
-    # handlers uvicorn attaches to root.
+    # A dedicated named logger, not the root logger -- keeps this independent
+    # of uvicorn's own logging config, and propagate=False keeps our lines
+    # from also going through any handlers uvicorn attaches to root.
     logger = logging.getLogger(_LOGGER_NAME)
     logger.setLevel(logging.INFO)
     logger.propagate = False

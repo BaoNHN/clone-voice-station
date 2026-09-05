@@ -1,18 +1,13 @@
 """
 voice/scripts.py
 Fixed set of Vietnamese reading paragraphs used to collect voice samples for
-training a personal cloned voice (see templates/voice_profile.html).
+training a personal cloned voice.
 
-Paragraphs are general-topic (not legal text) and phonetically varied —
-covering different vowels, tones and consonant clusters — so a handful of
-short recordings still give the RVC training pipeline reasonably diverse
-audio. Each paragraph was trimmed to roughly half its original length
-(~50-60 words, ~15-20s spoken) so a single recording is quicker to get
-through without dropping below RVC's practical per-clip minimum. Reading
-all 8 now gives ~5-6 minutes total, short of the "~10-15 min of clean
-speech" guidance in colab/voice_server.ipynb — if trained-voice quality
-suffers, prefer asking users for extra takes (re-reading the same
-paragraph makes a new sample) or adding more paragraphs over lengthening
+Paragraphs are general-topic (not legal text) and phonetically varied so a
+handful of short recordings still give the RVC training pipeline reasonably
+diverse audio (~50-60 words / ~15-20s each). Reading all 8 gives ~5-6
+minutes total, short of the "~10-15 min of clean speech" guidance -- if
+trained-voice quality suffers, prefer more takes/paragraphs over lengthening
 these back out.
 """
 

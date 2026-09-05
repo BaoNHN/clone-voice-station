@@ -4,6 +4,7 @@
 /stt_adapters_storage/
 /voice_station.db
 session_secret.txt
+ai_change_log.txt
 .idea/
 __pycache__/
 *.pyc
