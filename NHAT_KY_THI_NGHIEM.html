@@ -149,7 +149,7 @@
     <li><a href="#tn4">5. TN4: Gate LoRA Tier 2</a></li>
     <li><a href="#tn5">6. TN5: Huấn luyện RVC</a></li>
     <li><a href="#tn6">7. TN6: Pilot đầu tiên</a></li>
-    <li><a href="#chuachay">8. Chưa đo</a></li>
+    <li><a href="#chuachay">8. Ngoài phạm vi luận văn</a></li>
     <li><a href="#chayl">9. Chạy lại</a></li>
     <li><a href="#log">10. Danh mục log</a></li>
   </ul>
@@ -164,7 +164,7 @@
   <strong class="label">Quy mô</strong>
   Đây là đo ở quy mô phòng thí nghiệm. Bộ test ASR có 30 câu, một người nói, đọc theo văn bản, thu trong phòng yên tĩnh bằng một thiết bị. Các thí nghiệm RVC chạy trên Colab bậc miễn phí. Không có phép đo nào ở đây đủ để kết luận về hành vi khi triển khai thật: thiếu đa dạng người nói, thiếu nói tự nhiên, thiếu điều kiện nhiễu.
 </div>
-<p>Mỗi mục dưới đây ghi rõ thứ đã đo được và thứ chưa đo. Phần khảo sát MOS và so sánh với baseline F5-TTS chưa chạy, xem mục 8.</p>
+<p>Mỗi mục dưới đây ghi rõ thứ đã đo được. Khảo sát MOS, các metric dự đoán (UTMOS/NISQA/ECAPA) trên đầu ra RVC thật, so sánh với baseline F5-TTS, và bảng đo trễ trước/sau cho từng kỹ thuật T1–T4 đều <strong>nằm ngoài phạm vi luận văn theo quyết định đã ghi ở Chương 6 và 7</strong>. Đây không phải việc còn dang dở, xem mục 8.</p>
 
 <h2 id="moitruong">1. Môi trường đo</h2>
 <p>Các metric neural cài trong virtualenv riêng <code>.venv-eval</code>, tách khỏi môi trường chạy dịch vụ. Lý do là <code>torchaudio</code> lệch phiên bản với <code>torch</code> đang dùng, và <code>speechbrain</code> nâng <code>huggingface_hub</code> lên bản mới hơn thứ các thành phần khác đang phụ thuộc.</p>
@@ -302,21 +302,21 @@
 </table>
 <p>Cả hai con số độ trễ đều vượt xa mục tiêu 4 giây của RQ3. Đây là khoảng cách mà kỹ thuật T2 ở Mục 6.3 nhắm tới, và nó được ghi nhận thay vì bỏ qua.</p>
 <h3>Độ nhạy của baseline F5-TTS</h3>
-<p>Endpoint baseline chạy thông suốt nhưng lộ một điểm cần chú ý trước khi làm khảo sát MOS. Clip tham chiếu dài 20.6 giây cho ra audio bị nén và nhanh bất thường: 2.01 giây cho câu 13 từ, khoảng 6.5 từ/giây. Clip tham chiếu sạch dài 7.0 giây với transcript khớp chính xác cho ra 3.82 giây, khoảng 3.4 từ/giây, cho cùng văn bản cần sinh.</p>
-<p>Kết luận rút ra: clip tham chiếu phải chọn đúng độ dài 6 đến 10 giây theo tài liệu của model, không lấy tuỳ tiện từ audio dài hơn.</p>
+<p>Endpoint baseline chạy thông suốt trong lần thử này nhưng lộ một điểm phương pháp luận đáng ghi lại. Clip tham chiếu dài 20.6 giây cho ra audio bị nén và nhanh bất thường: 2.01 giây cho câu 13 từ, khoảng 6.5 từ/giây. Clip tham chiếu sạch dài 7.0 giây với transcript khớp chính xác cho ra 3.82 giây, khoảng 3.4 từ/giây, cho cùng văn bản cần sinh.</p>
+<p>Kết luận rút ra: clip tham chiếu phải chọn đúng độ dài 6 đến 10 giây theo tài liệu của model, không lấy tuỳ tiện từ audio dài hơn. Ghi lại để nếu về sau có ai (kể cả chính tác giả) chạy lại so sánh với F5-TTS thì không lặp lại lỗi này. Bản thân phép so sánh đó không nằm trong phạm vi đo của luận văn (xem mục 8).</p>
 
-<h2 id="chuachay">8. Chưa đo</h2>
-<p>Các mục sau thuộc Bảng 8 nhưng chưa có số liệu.</p>
+<h2 id="chuachay">8. Ngoài phạm vi luận văn (không phải việc còn dang dở)</h2>
+<p>Bốn mục dưới đây từng được cân nhắc khi phát triển nhưng Chương 6.2.4 và 7.1 của luận văn đã <strong>chốt là ngoài phạm vi</strong>, không phải "sẽ đo sau". Lý do chung: luận văn một tác giả, một người nói mục tiêu, không đủ nguồn lực để làm một khảo sát cảm quan quy mô lớn (nhiều người nói, nhiều người nghe, nhiều điều kiện thu) đủ sức cho ra kết luận tổng quát. Làm nửa vời còn tệ hơn không làm. Công cụ đo (TN1, và <code>tools/eval_voice_quality.py</code>) vẫn được xây dựng và kiểm chứng đầy đủ, chỉ là không áp dụng lên một nghiên cứu cảm quan diện rộng.</p>
 <table>
-  <tr><th>Phép đo</th><th>Vướng ở đâu</th></tr>
-  <tr><td>MOS độ tự nhiên và độ giống giọng</td><td>Cần 20 người nghe chấm theo ITU-T P.808</td></tr>
-  <tr><td>UTMOS, NISQA, ECAPA trên đầu ra RVC</td><td>Công cụ đã chạy được, còn thiếu bộ audio sinh ra từ 30 câu trả lời</td></tr>
-  <tr><td>So sánh với baseline F5-TTS</td><td>Cùng lý do trên</td></tr>
-  <tr><td>Độ trễ đầu cuối sau khi áp dụng T1 đến T4</td><td>Chưa chạy đo trước và sau</td></tr>
+  <tr><th>Mục</th><th>Vì sao ngoài phạm vi</th></tr>
+  <tr><td>MOS độ tự nhiên và độ giống giọng</td><td>Cần 20 người nghe theo ITU-T P.808, vượt quy mô một luận văn cá nhân</td></tr>
+  <tr><td>UTMOS, NISQA, ECAPA trên đầu ra RVC thật</td><td>Công cụ đã kiểm chứng (TN1), nhưng chỉ có ý nghĩa như một phần của khảo sát cảm quan diện rộng đã bị loại ở trên</td></tr>
+  <tr><td>So sánh với baseline F5-TTS</td><td>Cùng lý do trên: phép so sánh này gắn liền với khảo sát MOS đã loại</td></tr>
+  <tr><td>Bảng đo trễ trước/sau cho từng kỹ thuật T1–T4</td><td>Mục 6.3 của luận văn mô tả các kỹ thuật này như lựa chọn thiết kế kỹ thuật đã áp dụng, không cam kết bảng benchmark trước/sau riêng cho từng kỹ thuật</td></tr>
 </table>
 <div class="box warn">
-  <strong class="label">Cần làm trước khi đo RVC</strong>
-  Giọng nhân bản mặc định lấy nền TTS là giọng nữ. Với người nói mục tiêu là nam, cần đổi giọng nền sang <code>vi-VN-NamMinhNeural</code> trong trang hồ sơ giọng nói. Chuyển chéo giới tính làm giảm độ tự nhiên và độ giống giọng, nên nếu không đổi thì số MOS và UTMOS đo được là của cấu hình sai. Đổi giọng nền không cần huấn luyện lại.
+  <strong class="label">Nếu sau này có ai muốn tự làm thêm</strong>
+  Giọng nhân bản mặc định lấy nền TTS là giọng nữ. Với người nói mục tiêu là nam, cần đổi giọng nền sang <code>vi-VN-NamMinhNeural</code> trong trang hồ sơ giọng nói trước khi sinh audio để đo. Nếu không, số liệu đo được là của cấu hình chuyển chéo giới tính, không phản ánh đúng chất lượng thật. Đổi giọng nền không cần huấn luyện lại.
 </div>
 
 <h2 id="chayl">9. Chạy lại toàn bộ</h2>
