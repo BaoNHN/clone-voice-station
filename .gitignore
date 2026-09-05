@@ -17,3 +17,12 @@ __pycache__/
 /local_rvc_worker.err.log
 /stt_general_benchmark/
 /tools/medical_eval_set/
+/.venv-eval/
+/tools/NISQA/
+
+# Voice recordings are biometric data (thesis Section 5.1, Law 91/2025/QH15).
+# The transcripts and the question list are enough to reproduce the measurement;
+# the audio itself stays local.
+/tools/legal_testset/*.m4a
+/tools/legal_testset/*.wav
+/tools/legal_testset/**/*.wav

@@ -1,0 +1,16 @@
+{
+  "run_at": "2026-09-05T13:34:06",
+  "test_set": "tools/legal_testset/set30",
+  "n_clips": 30,
+  "asr_engine": "phowhisper:PhoWhisper-large",
+  "corpus_wer_pct": 1.93,
+  "total_errors": 9,
+  "total_ref_words": 466,
+  "substitutions": 4,
+  "deletions": 2,
+  "insertions": 3,
+  "clips_exact": 21,
+  "mean_latency_s": 3.76,
+  "threshold_pct": 15.0,
+  "verdict": "PASS"
+}

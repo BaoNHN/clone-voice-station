@@ -1,0 +1,18 @@
+SNR estimator validation
+  sample rate      22050 Hz
+  speech level     -20.0 dBFS
+  random seed      1
+
+ noise sigma  reference  measured   error  activity  rejected est.
+       1e-04      60.0dB     58.8dB   -1.2dB     72.0%          12.4dB
+       1e-03      40.0dB     39.0dB   -1.0dB     74.6%          12.4dB
+       1e-02      20.0dB     18.8dB   -1.2dB     81.5%          11.4dB
+
+Worst absolute error over a 40 dB sweep: 1.2 dB
+The rejected estimator stays flat while the reference moves 40 dB, which is why
+it was replaced by the frame-power percentile.
+
+No-pause case (a clip read without gaps between words):
+  reference 40.0dB, measured 39.6dB, activity 90.2%
+  Above the HIGH_ACTIVITY_WARN threshold the harness flags the file so this figure
+  is read as a lower bound rather than an estimate.

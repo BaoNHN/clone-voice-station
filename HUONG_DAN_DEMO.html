@@ -149,6 +149,7 @@
       <li><a href="#config">5. Config / tài khoản mặc định</a></li>
       <li><a href="#ngrok">6. Demo công khai qua ngrok</a></li>
       <li><a href="#loi">7. Xử lý lỗi thường gặp</a></li>
+      <li><a href="#danhgia">8. Đo chất lượng giọng nói (đánh giá luận văn)</a></li>
     </ul>
   </nav>
 
@@ -295,6 +296,43 @@ python start_ngrok.py</code></pre>
     <pre><code>cd /d D:\hoc\project\clone-voice-station
 python -c "from database.database import get_setting; print(get_setting('rvc_endpoint'))"</code></pre>
     <p>Để trống hoặc chưa cấu hình là bình thường — RVC tự chạy fallback local (trong tiến trình clone-voice-station). Chỉ cần set khi muốn dùng Colab (URL cloudflared).</p>
+
+    <h2 id="danhgia">8. Đo chất lượng giọng nói (đánh giá luận văn)</h2>
+    <p>Phần đánh giá khách quan cho Bảng 8 của luận văn (SNR theo ITU-T P.56, UTMOS, NISQA, ECAPA cosine) chạy bằng 2 script trong <code>clone-voice-station/tools/</code>. Hướng dẫn đầy đủ ở <strong>mục 11 của <code>clone-voice-station/HUONG_DAN_DEMO.md</code></strong>.</p>
+
+    <h3>Cài một lần — venv riêng</h3>
+    <p>UTMOS/NISQA/ECAPA cần <code>torch</code>, <code>torchaudio</code>, <code>speechbrain</code>. <strong>Không cài vào môi trường đang chạy station</strong> (torchaudio lệch phiên bản với torch, speechbrain nâng <code>huggingface_hub</code>) — dùng venv tách biệt:</p>
+    <pre><code>cd /d D:\hoc\project\clone-voice-station
+python -m venv .venv-eval
+.venv-eval\Scripts\python -m pip install numpy scipy speechbrain librosa pandas
+.venv-eval\Scripts\python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+.venv-eval\Scripts\python -m pip install -e ..\clone-voice-client
+git clone https://github.com/gabrielmittag/NISQA.git tools\NISQA
+.venv-eval\Scripts\python tools\eval_voice_quality.py --check</code></pre>
+    <p><code>--check</code> in ra trạng thái từng metric. Metric nào thiếu thư viện sẽ báo <code>UNAVAILABLE</code> và bị bỏ qua, phần còn lại vẫn chạy.</p>
+
+    <h3>Sinh bộ test rồi chấm</h3>
+    <p>Cần clone-voice-station đang chạy và Colab RVC còn sống. <code>answers.txt</code>: mỗi dòng một câu trả lời (audio mà trợ lý đọc ra, không phải câu hỏi).</p>
+    <pre><code>.venv-eval\Scripts\python tools\gen_voice_testset.py --list-profiles --external-user-id u1
+
+.venv-eval\Scripts\python tools\gen_voice_testset.py --texts answers.txt ^
+    --external-user-id u1 --profile-id 12 --out rvc_out\
+.venv-eval\Scripts\python tools\gen_voice_testset.py --texts answers.txt ^
+    --external-user-id u1 --profile-id 3  --out f5_out\
+
+.venv-eval\Scripts\python tools\eval_voice_quality.py ^
+    --system rvc_out\ --baseline f5_out\ --speaker-refs speaker_refs\ ^
+    --nisqa-dir tools\NISQA --out results.csv
+
+python tools\eval_stt_wer.py path\to\testset\ --language vi --out wer.csv</code></pre>
+    <p>Chọn 2 profile: một <code>kind=cloned, status=ready</code> (hệ thống TTS + RVC) và một có <code>base_tts_voice=f5tts:default</code> (baseline). File đặt tên theo số dòng nên 2 thư mục ghép cặp theo tên; mỗi thư mục có thêm <code>latency.csv</code> (số liệu độ trễ cho RQ3).</p>
+
+    <h3>Lưu ý</h3>
+    <ul>
+      <li><code>speaker_refs/</code> phải là bản ghi giọng thật <strong>không nằm trong tập train RVC</strong>, nếu không ECAPA chỉ đo mức độ học thuộc dữ liệu cũ.</li>
+      <li>File báo <code>NO-RVC</code> là do Colab offline lúc sinh nên <code>/api/speak</code> trả TTS thường — script loại khỏi trung bình; bật lại Colab rồi sinh lại đúng những file đó.</li>
+      <li>Chỉ cần SNR thì chạy bằng Python thường, không cần venv: <code>python tools\eval_voice_quality.py --system rvc_out\</code></li>
+    </ul>
 
     <footer>
       Chi tiết từng tính năng: xem <code>terminal.txt</code> trong từng thư mục project, và <code>HUONG_DAN_DEMO.md</code> của mỗi project (<code>HUONG_DAN_CHAY_TOAN_HE_THONG.md</code>, nguồn Markdown của trang này, nằm cùng thư mục).

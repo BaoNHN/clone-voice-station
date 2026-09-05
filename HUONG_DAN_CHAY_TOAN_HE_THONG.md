@@ -107,3 +107,51 @@ python start_ngrok.py
 - Mỗi `start_ngrok.py` cần `NGROK_AUTHTOKEN` riêng (hoặc dùng chung 1 token cho nhiều tunnel nếu gói ngrok cho phép).
 - Tunnel ngrok miễn phí đổi URL mỗi lần khởi động lại — cần lặp lại Bước 2 mỗi lần Bước 1 chạy lại.
 - `clone-voice-client` không bao giờ cần lộ ra ngrok — nó không phải service, không lắng nghe port nào cả.
+
+---
+
+## 4. Đo chất lượng giọng nói (đánh giá luận văn)
+
+Phần đánh giá khách quan cho Bảng 8 của luận văn (SNR, UTMOS, NISQA, ECAPA cosine) chạy bằng 2 script trong `clone-voice-station/tools/`. Hướng dẫn đầy đủ nằm ở **mục 11 của `clone-voice-station/HUONG_DAN_DEMO.md`**; dưới đây là bản rút gọn.
+
+### Cài một lần — venv riêng
+
+UTMOS/NISQA/ECAPA cần `torch`, `torchaudio`, `speechbrain`. **Không cài vào môi trường đang chạy station** (torchaudio lệch phiên bản với torch, speechbrain nâng `huggingface_hub`) — dùng venv tách biệt:
+
+```bash
+cd clone-voice-station
+python -m venv .venv-eval
+.venv-eval/Scripts/python -m pip install numpy scipy speechbrain librosa pandas
+.venv-eval/Scripts/python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+.venv-eval/Scripts/python -m pip install -e ../clone-voice-client
+git clone https://github.com/gabrielmittag/NISQA.git tools/NISQA
+.venv-eval/Scripts/python tools/eval_voice_quality.py --check
+```
+
+### Sinh bộ test rồi chấm
+
+Cần clone-voice-station đang chạy (Terminal 1) và Colab RVC còn sống.
+
+```bash
+# 1. Xem có profile nào
+.venv-eval/Scripts/python tools/gen_voice_testset.py --list-profiles --external-user-id u1
+
+# 2. Sinh audio: profile cloned (RVC) và profile f5tts:default (baseline)
+.venv-eval/Scripts/python tools/gen_voice_testset.py --texts answers.txt \
+    --external-user-id u1 --profile-id 12 --out rvc_out/
+.venv-eval/Scripts/python tools/gen_voice_testset.py --texts answers.txt \
+    --external-user-id u1 --profile-id 3  --out f5_out/
+
+# 3. Chấm
+.venv-eval/Scripts/python tools/eval_voice_quality.py \
+    --system rvc_out/ --baseline f5_out/ --speaker-refs speaker_refs/ \
+    --nisqa-dir tools/NISQA --out results.csv
+
+# WER của đường STT (không cần venv riêng)
+python tools/eval_stt_wer.py path/to/testset/ --language vi --out wer.csv
+```
+
+### Lưu ý
+- `speaker_refs/` phải là bản ghi giọng thật **không nằm trong tập train RVC**, nếu không ECAPA chỉ đo mức độ học thuộc dữ liệu cũ.
+- File bị báo `NO-RVC` là do Colab offline lúc sinh nên `/api/speak` trả TTS thường — script loại nó khỏi trung bình; bật lại Colab và sinh lại đúng những file đó.
+- Chỉ cần SNR thì chạy bằng Python thường, không cần venv: `python tools/eval_voice_quality.py --system rvc_out/`

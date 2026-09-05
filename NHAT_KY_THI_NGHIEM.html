@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nhật ký thí nghiệm hệ thống giọng nói</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-alt: #f6f7f9;
+    --text: #1c1f26;
+    --text-dim: #5b6270;
+    --border: #e2e5ea;
+    --accent: #2e5aac;
+    --accent-soft: #eaf0fb;
+    --code-bg: #1c1f26;
+    --code-text: #e8eaf0;
+    --warn-bg: #fdf2e9;
+    --warn-border: #e8a54b;
+    --danger-bg: #fdecec;
+    --danger-border: #d9534f;
+    --ok-bg: #eaf7ee;
+    --ok-border: #3fa85c;
+    --pill-8000: #2e5aac;
+    --pill-8090: #b9770e;
+    --pill-8091: #7d3c98;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --bg-alt: #1b1e24;
+      --text: #e7e9ee;
+      --text-dim: #9aa1ae;
+      --border: #2b2f38;
+      --accent: #7fa6f5;
+      --accent-soft: #1e2a42;
+      --code-bg: #0d0f13;
+      --code-text: #e8eaf0;
+      --warn-bg: #332a1a;
+      --warn-border: #c68a3b;
+      --danger-bg: #3a2020;
+      --danger-border: #d9534f;
+      --ok-bg: #17301f;
+      --ok-border: #3fa85c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+    line-height: 1.6;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; }
+    nav.toc { position: static !important; border-right: none !important; border-bottom: 1px solid var(--border); }
+  }
+  nav.toc {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 18px;
+    border-right: 1px solid var(--border);
+    background: var(--bg-alt);
+  }
+  nav.toc h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); margin: 0 0 12px; }
+  nav.toc ul { list-style: none; margin: 0; padding: 0; }
+  nav.toc li { margin: 2px 0; }
+  nav.toc a {
+    display: block; padding: 7px 10px; border-radius: 6px;
+    color: var(--text); text-decoration: none; font-size: 14px;
+  }
+  nav.toc a:hover { background: var(--accent-soft); color: var(--accent); }
+  main { padding: 40px 44px 100px; min-width: 0; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  .subtitle { color: var(--text-dim); margin: 0 0 32px; font-size: 15px; }
+  h2 {
+    font-size: 20px; margin: 48px 0 14px; padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+  h2:first-of-type { border-top: none; margin-top: 0; }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  p { margin: 10px 0; }
+  code {
+    background: var(--bg-alt); border: 1px solid var(--border);
+    padding: 1px 6px; border-radius: 4px; font-size: 13px;
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  pre {
+    background: var(--code-bg); color: var(--code-text);
+    padding: 14px 16px; border-radius: 8px; overflow-x: auto;
+    font-size: 13px; line-height: 1.55;
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  pre code { background: none; border: none; padding: 0; color: inherit; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 20px; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--bg-alt); }
+  .pill {
+    display: inline-block; padding: 2px 9px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; color: #fff;
+  }
+  .pill.p8000 { background: var(--pill-8000); }
+  .pill.p8090 { background: var(--pill-8090); }
+  .pill.p8091 { background: var(--pill-8091); }
+  .box { border-radius: 8px; padding: 14px 16px; margin: 14px 0; border: 1px solid; }
+  .box.warn { background: var(--warn-bg); border-color: var(--warn-border); }
+  .box.danger { background: var(--danger-bg); border-color: var(--danger-border); }
+  .box.ok { background: var(--ok-bg); border-color: var(--ok-border); }
+  .box strong.label { display: block; margin-bottom: 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+  .arch {
+    display: grid; gap: 10px; margin: 18px 0 26px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+  .arch .node {
+    border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: var(--bg-alt);
+  }
+  .arch .node h4 { margin: 0 0 4px; font-size: 14px; }
+  .arch .node p { margin: 0; font-size: 12.5px; color: var(--text-dim); }
+  .step-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%; background: var(--accent);
+    color: #fff; font-size: 12px; font-weight: 700; margin-right: 8px;
+  }
+  footer { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc">
+  <h2>Mục lục</h2>
+  <ul>
+    <li><a href="#phamvi">0. Phạm vi và giới hạn</a></li>
+    <li><a href="#moitruong">1. Môi trường đo</a></li>
+    <li><a href="#tn1">2. TN1: Kiểm chứng SNR</a></li>
+    <li><a href="#tn2">3. TN2: Cắt bộ test</a></li>
+    <li><a href="#tn3">4. TN3: WER pháp lý</a></li>
+    <li><a href="#tn4">5. TN4: Gate LoRA Tier 2</a></li>
+    <li><a href="#tn5">6. TN5: Huấn luyện RVC</a></li>
+    <li><a href="#tn6">7. TN6: Pilot đầu tiên</a></li>
+    <li><a href="#chuachay">8. Chưa đo</a></li>
+    <li><a href="#chayl">9. Chạy lại</a></li>
+    <li><a href="#log">10. Danh mục log</a></li>
+  </ul>
+</nav>
+<main>
+<h1>Nhật ký thí nghiệm</h1>
+<p class="subtitle">Số liệu đo được, điều kiện đo, và lệnh để chạy lại. Đi kèm luận văn <em>Integrating Speech-to-Text and RVC-Based Voice Conversion into an AI Assistant</em>.</p>
+
+<h2 id="phamvi">0. Phạm vi và giới hạn</h2>
+<p>Trang này ghi lại các phép đo đã thực hiện trên hệ thống, kèm điều kiện đo và lệnh tái lập. Mục đích là để người đọc kiểm tra lại được, không phải để trình bày kết quả cuối cùng.</p>
+<div class="box warn">
+  <strong class="label">Quy mô</strong>
+  Đây là đo ở quy mô phòng thí nghiệm. Bộ test ASR có 30 câu, một người nói, đọc theo văn bản, thu trong phòng yên tĩnh bằng một thiết bị. Các thí nghiệm RVC chạy trên Colab bậc miễn phí. Không có phép đo nào ở đây đủ để kết luận về hành vi khi triển khai thật: thiếu đa dạng người nói, thiếu nói tự nhiên, thiếu điều kiện nhiễu.
+</div>
+<p>Mỗi mục dưới đây ghi rõ thứ đã đo được và thứ chưa đo. Phần khảo sát MOS và so sánh với baseline F5-TTS chưa chạy, xem mục 8.</p>
+
+<h2 id="moitruong">1. Môi trường đo</h2>
+<p>Các metric neural cài trong virtualenv riêng <code>.venv-eval</code>, tách khỏi môi trường chạy dịch vụ. Lý do là <code>torchaudio</code> lệch phiên bản với <code>torch</code> đang dùng, và <code>speechbrain</code> nâng <code>huggingface_hub</code> lên bản mới hơn thứ các thành phần khác đang phụ thuộc.</p>
+<table>
+  <tr><th>Thành phần</th><th>Phiên bản</th><th>Dùng cho</th></tr>
+  <tr><td>Python</td><td>3.13.9</td><td>Trình thông dịch của môi trường đo</td></tr>
+  <tr><td>numpy / scipy</td><td>2.5.2 / 1.18.1</td><td>Mức tín hiệu ITU-T P.56 và ước lượng SNR</td></tr>
+  <tr><td>PyTorch</td><td>2.14.0+cpu</td><td>Chạy suy luận cho các model dự đoán</td></tr>
+  <tr><td>torchaudio</td><td>2.11.0+cpu</td><td>Tiền xử lý audio cho SpeechMOS và SpeechBrain</td></tr>
+  <tr><td>SpeechMOS</td><td>v1.2.0, <code>utmos22_strong</code></td><td>UTMOS, dự đoán độ tự nhiên</td></tr>
+  <tr><td>NISQA</td><td><code>nisqa_tts.tar</code>, NISQA_TTS_v1</td><td>NISQA, đối chiếu chéo với UTMOS</td></tr>
+  <tr><td>SpeechBrain</td><td>1.1.1, <code>spkrec-ecapa-voxceleb</code></td><td>Embedding ECAPA-TDNN cho độ tương đồng giọng</td></tr>
+  <tr><td>librosa / pandas</td><td>1.0.0 / 3.0.5</td><td>Phụ thuộc runtime của NISQA</td></tr>
+  <tr><td>ASR</td><td>PhoWhisper-large qua Colab T4</td><td>Nhận dạng tiếng Việt</td></tr>
+</table>
+<p>Phiên bản có ý nghĩa với kết quả. Điểm MOS dự đoán không so sánh được giữa các phiên bản model khác nhau, nên chỉ ghi tên metric là không đủ để tái lập.</p>
+
+<h2 id="tn1">2. TN1: Kiểm chứng bộ ước lượng SNR</h2>
+<p>SNR là một tiêu chí trong Bảng 8 của luận văn. Trước khi dùng, cần biết bộ ước lượng có thật sự phục hồi được tỉ số đang có hay không. Cách kiểm: sinh tín hiệu tổng hợp với mức tiếng nói và mức nhiễu do script tự đặt, nên SNR thật đã biết chính xác.</p>
+<table>
+  <tr><th>Nhiễu bơm vào (sigma)</th><th>SNR tham chiếu</th><th>SNR đo được</th><th>Sai số</th><th>Ước lượng đã loại</th></tr>
+  <tr><td>1e-04</td><td>60.0 dB</td><td>58.8 dB</td><td>-1.2 dB</td><td>12.4 dB</td></tr>
+  <tr><td>1e-03</td><td>40.0 dB</td><td>39.0 dB</td><td>-1.0 dB</td><td>12.4 dB</td></tr>
+  <tr><td>1e-02</td><td>20.0 dB</td><td>18.8 dB</td><td>-1.2 dB</td><td>11.4 dB</td></tr>
+</table>
+<p>Sai số lớn nhất là 1.2 dB trên dải quét 40 dB, và luôn lệch về phía thấp, nên con số báo cáo là thận trọng so với ngưỡng sàng lọc.</p>
+<h3>Cách làm đầu tiên đã bị loại</h3>
+<p>Bản cài đặt đầu lấy mức nhiễu từ phần bù của mặt nạ hoạt động P.56. Cột cuối trong bảng cho thấy nó đứng yên quanh 12 dB trong khi SNR thật quét qua 40 dB. Nguyên nhân là mặt nạ P.56 có hangover 200 ms, nên phần bù của nó vẫn chứa đuôi tiếng nói. Thứ đo được ở đó là tiếng nói, không phải nhiễu. P.56 chuẩn hoá cách đo mức tín hiệu, nó không định nghĩa cách ước lượng nền nhiễu.</p>
+<p>Bản dùng hiện tại lấy phân vị thấp của công suất khung ngắn hạn.</p>
+<h3>Trường hợp xấu</h3>
+<p>Với clip đọc liên tục không có khoảng nghỉ, phân vị rơi vào khung tiếng nói nhỏ nhất thay vì khoảng lặng. Đo được 39.6 dB so với tham chiếu 40.0 dB, hệ số hoạt động 90.2%. Vượt ngưỡng cảnh báo nên harness gắn cờ file đó và con số được đọc là chặn dưới.</p>
+<pre><code>.venv-eval/Scripts/python experiments/validate_snr_estimator.py</code></pre>
+<p>Log: <code>experiments/logs/snr_validation.txt</code></p>
+
+<h2 id="tn2">3. TN2: Cắt bản thu thành bộ test</h2>
+<p>Đầu vào là một bản thu duy nhất dài 172.6 giây, mono 44.1 kHz AAC, một người đọc lần lượt 30 câu hỏi trong <code>tools/legal_testset/questions_vi.txt</code>.</p>
+<table>
+  <tr><th>Chỉ số</th><th>Giá trị</th></tr>
+  <tr><td>Nền nhiễu (phân vị 10)</td><td>-56.6 dBFS</td></tr>
+  <tr><td>Đỉnh</td><td>-11.4 dBFS</td></tr>
+  <tr><td>Dải động</td><td>45.3 dB</td></tr>
+</table>
+<h3>Cắt theo khoảng lặng: thất bại</h3>
+<p>Ngưỡng cố định 0.7 giây chỉ tách được 10 đoạn trên 30 câu. Quét tham số cho thấy vài cấu hình ra đúng 30 đoạn, nhưng đều còn đoạn dài 8.9 đến 11.9 giây, tức là có chỗ dính hai câu và chỗ khác tách nhầm, bù trừ nhau thành đúng số lượng.</p>
+<div class="box danger">
+  <strong class="label">Số đo giải thích thất bại</strong>
+  Khoảng lặng ngắn nhất được chọn làm ranh giới là 0.60 giây. Khoảng lặng dài nhất bị loại là 0.57 giây. Chênh lệch 0.03 giây. Với bản thu này, khoảng nghỉ giữa hai câu và khoảng nghỉ giữa hai cụm từ trong cùng một câu có cùng độ dài, nên không tồn tại ngưỡng nào tách được chúng.
+</div>
+<h3>Căn theo nội dung: thành công</h3>
+<p>Nội dung 30 câu đã biết trước, nên ranh giới lấy được từ thứ đã nói thay vì từ độ dài khoảng nghỉ. Quy trình: cắt dư ở mọi khoảng nghỉ khả dĩ, nhận dạng từng đoạn bằng PhoWhisper, rồi dùng quy hoạch động gán các đoạn liên tiếp vào 30 câu sao cho khớp chữ nhất.</p>
+<table>
+  <tr><th>Chỉ số</th><th>Giá trị</th></tr>
+  <tr><td>Số đoạn ứng viên</td><td>46</td></tr>
+  <tr><td>Số câu căn được</td><td>30 / 30</td></tr>
+  <tr><td>Độ tương đồng từ trung bình</td><td>0.96</td></tr>
+  <tr><td>Thời lượng mỗi clip</td><td>4.5 đến 8.4 giây</td></tr>
+  <tr><td>Tổng tiếng nói</td><td>180.7 giây</td></tr>
+</table>
+<pre><code>python tools/split_recording.py "tools/legal_testset/Thoại test.m4a" \
+    --sentences tools/legal_testset/questions_vi.txt --align-asr --dry-run</code></pre>
+<p>Bỏ <code>--dry-run</code> và thêm <code>--out</code> để ghi file. Cần endpoint ASR chạy.</p>
+
+<h2 id="tn3">4. TN3: WER trên bộ câu hỏi pháp lý</h2>
+<p>Chấm bộ 30 clip ở TN2 bằng PhoWhisper-large. Ngưỡng chấp nhận trong Bảng 8 là 15%.</p>
+<table>
+  <tr><th>Chỉ số</th><th>Giá trị</th></tr>
+  <tr><td>WER toàn corpus</td><td><strong>1.93%</strong> (9 lỗi / 466 từ tham chiếu)</td></tr>
+  <tr><td>Clip khớp tuyệt đối</td><td>21 / 30</td></tr>
+  <tr><td>Thay từ / thiếu từ / thừa từ</td><td>4 / 2 / 3</td></tr>
+  <tr><td>Độ trễ trung bình mỗi clip</td><td>3.76 giây</td></tr>
+  <tr><td>Tốc độ đọc</td><td>2.0 đến 3.1 từ/giây</td></tr>
+  <tr><td>Kết luận so ngưỡng 15%</td><td>Đạt</td></tr>
+</table>
+<h3>Phân loại 9 lỗi</h3>
+<p>Bốn lỗi là ASR nghe nhầm. Cả bốn đều là từ pháp lý gần đồng âm.</p>
+<table>
+  <tr><th>Clip</th><th>Tham chiếu</th><th>Nhận dạng</th></tr>
+  <tr><td>010</td><td>giải thể</td><td>giả thể</td></tr>
+  <tr><td>014</td><td>hộ kinh doanh</td><td>họ kinh doanh</td></tr>
+  <tr><td>027</td><td>tạm ngừng</td><td>tạm dừng</td></tr>
+  <tr><td>028</td><td>trong</td><td>theo</td></tr>
+</table>
+<p>Đây đúng là loại lỗi mà cơ chế hotword Tier 1 nhắm tới. Nó cho thấy phần còn lại để cải thiện nằm ở từ vựng chuyên ngành, không phải ở độ bền âm học.</p>
+<p>Năm lỗi còn lại là audio và transcript lệch nhau, do người đọc thêm hoặc bớt một chữ so với văn bản gợi ý.</p>
+<table>
+  <tr><th>Clip</th><th>Lệch</th></tr>
+  <tr><td>019</td><td>thừa chữ "được"</td></tr>
+  <tr><td>022</td><td>thừa chữ "nào"</td></tr>
+  <tr><td>023</td><td>thừa chữ "các"</td></tr>
+  <tr><td>013</td><td>thiếu chữ "như"</td></tr>
+  <tr><td>030</td><td>thiếu chữ "trong"</td></tr>
+</table>
+<div class="box warn">
+  <strong class="label">Cần xử lý trước khi trích dẫn con số này</strong>
+  Chuẩn đo WER yêu cầu transcript tham chiếu là bản ghi nguyên văn lời đã nói. Năm clip trên cần nghe lại và sửa file <code>.txt</code> cho khớp lời thật. Sau khi sửa, WER chỉ còn phản ánh lỗi ASR và sẽ giảm xuống khoảng 0.9%.
+</div>
+<div class="box warn">
+  <strong class="label">Thiên lệch đã biết</strong>
+  Ranh giới clip ở TN2 do chính PhoWhisper căn. Bộ ranh giới đó hơi có lợi cho model đang được chấm ở TN3. Mức tương đồng 0.96 giới hạn phần nào ảnh hưởng này, nhưng nó khác không. Ngoài ra đây là giọng đọc theo văn bản, dễ nhận dạng hơn nói tự nhiên, nên 1.93% nên đọc là chặn dưới.
+</div>
+<pre><code>python tools/eval_stt_wer.py tools/legal_testset/set30 --language vi --out wer.csv</code></pre>
+<p>Log: <code>experiments/logs/wer_legal_set30.csv</code> và <code>wer_legal_set30_summary.json</code></p>
+
+<h2 id="tn4">5. TN4: Gate chấp nhận adapter LoRA Tier 2</h2>
+<p>Tiêu chí chấp nhận adapter được sửa bốn lần. Bảng dưới ghi từng cấu hình đã thử và gate đã dùng để phán quyết. Chi tiết lý do từng lần sửa nằm ở Mục 4.1 và Bảng 6 của luận văn.</p>
+<table>
+  <tr><th>Cấu hình</th><th>Model nền</th><th>Gate</th><th>WER adapter so với nền</th><th>Kết quả</th></tr>
+  <tr><td>458 mẫu y tế, lấy epoch cuối</td><td>whisper-tiny</td><td>G0</td><td>62.8% so với 32.0%</td><td>Tụt lùi</td></tr>
+  <tr><td>60 mẫu y tế</td><td>whisper-tiny</td><td>G2, G3</td><td>52.0% so với 60.2% (miền riêng); 47.6% so với 44.4% (chung)</td><td>Bị loại</td></tr>
+  <tr><td>400 mẫu y tế</td><td>whisper-tiny</td><td>G3</td><td>52.4% so với 44.4%</td><td>Bị loại</td></tr>
+  <tr><td>400 mẫu y tế</td><td>whisper-base</td><td>G3</td><td>42.0% so với 34.8%</td><td>Bị loại</td></tr>
+  <tr><td>~90 y tế trộn ~410 chung</td><td>whisper-tiny</td><td>G3</td><td>48.5% so với 44.4%</td><td>Bị loại</td></tr>
+  <tr><td>400 mẫu y tế</td><td>whisper-tiny</td><td>G4</td><td><strong>47.0% so với 61.7%</strong></td><td>Chấp nhận</td></tr>
+  <tr><td>200 mẫu VLSP2020, dừng sớm epoch 3</td><td>whisper-tiny</td><td>G4</td><td>44.0% so với 44.6%</td><td>Chấp nhận, đặt làm mặc định hệ thống</td></tr>
+</table>
+<p>Cấu hình được chấp nhận giảm 14.7 điểm phần trăm tuyệt đối, tương đương khoảng 24% tương đối, trên tập test độc lập.</p>
+
+<h2 id="tn5">6. TN5: Huấn luyện RVC</h2>
+<table>
+  <tr><th>Ngày</th><th>Giọng</th><th>Dữ liệu</th><th>Kết quả</th></tr>
+  <tr><td>2026-08-05</td><td>TestGiong1 (nam)</td><td>không ghi nhận</td><td>Model 55.2 MB, index FAISS 25.0 MB</td></tr>
+  <tr><td>2026-08-11</td><td>Chạy lại xác nhận pipeline</td><td>6 mẫu, đặt 200 epoch</td><td>44 phút trên T4 miễn phí, loss tốt nhất 33.832 tại epoch 134, model 52.7 MB, index 12.2 MB</td></tr>
+  <tr><td>2026-08-12</td><td>GiọngNữ</td><td>13 đoạn sau tiền xử lý</td><td>Dừng sớm tại epoch 36/200, model 55.2 MB, index 13.3 MB</td></tr>
+</table>
+<p>Lần chạy 2026-08-11 kiểm tra luôn hành vi suy giảm có kiểm soát. Khi tunnel Colab mất kết nối, các lệnh gọi <code>/api/speak</code> sau đó tự chuyển sang suy luận cục bộ thay vì báo lỗi. Cùng lần đó phát hiện và sửa hai lỗi: thẻ provenance không nhúng được vào audio do cấu hình pydub với ffmpeg, và tiến độ huấn luyện phía Colab không về tới log hệ thống.</p>
+
+<h2 id="tn6">7. TN6: Pilot đầu tiên</h2>
+<p>Chạy thử đầu tiên trước khi có bộ test 30 câu, nên chỉ dùng một câu nói miền y tế có sẵn transcript, 137 từ tham chiếu.</p>
+<table>
+  <tr><th>Đo</th><th>Kết quả</th></tr>
+  <tr><td>PhoWhisper-large qua Colab</td><td>11.7% WER</td></tr>
+  <tr><td>Whisper-small chạy CPU cục bộ</td><td>21.2% WER</td></tr>
+  <tr><td>Độ trễ, đường Colab</td><td>18.68 giây</td></tr>
+  <tr><td>Độ trễ, đường cục bộ</td><td>khoảng 8.4 giây</td></tr>
+</table>
+<p>Cả hai con số độ trễ đều vượt xa mục tiêu 4 giây của RQ3. Đây là khoảng cách mà kỹ thuật T2 ở Mục 6.3 nhắm tới, và nó được ghi nhận thay vì bỏ qua.</p>
+<h3>Độ nhạy của baseline F5-TTS</h3>
+<p>Endpoint baseline chạy thông suốt nhưng lộ một điểm cần chú ý trước khi làm khảo sát MOS. Clip tham chiếu dài 20.6 giây cho ra audio bị nén và nhanh bất thường: 2.01 giây cho câu 13 từ, khoảng 6.5 từ/giây. Clip tham chiếu sạch dài 7.0 giây với transcript khớp chính xác cho ra 3.82 giây, khoảng 3.4 từ/giây, cho cùng văn bản cần sinh.</p>
+<p>Kết luận rút ra: clip tham chiếu phải chọn đúng độ dài 6 đến 10 giây theo tài liệu của model, không lấy tuỳ tiện từ audio dài hơn.</p>
+
+<h2 id="chuachay">8. Chưa đo</h2>
+<p>Các mục sau thuộc Bảng 8 nhưng chưa có số liệu.</p>
+<table>
+  <tr><th>Phép đo</th><th>Vướng ở đâu</th></tr>
+  <tr><td>MOS độ tự nhiên và độ giống giọng</td><td>Cần 20 người nghe chấm theo ITU-T P.808</td></tr>
+  <tr><td>UTMOS, NISQA, ECAPA trên đầu ra RVC</td><td>Công cụ đã chạy được, còn thiếu bộ audio sinh ra từ 30 câu trả lời</td></tr>
+  <tr><td>So sánh với baseline F5-TTS</td><td>Cùng lý do trên</td></tr>
+  <tr><td>Độ trễ đầu cuối sau khi áp dụng T1 đến T4</td><td>Chưa chạy đo trước và sau</td></tr>
+</table>
+<div class="box warn">
+  <strong class="label">Cần làm trước khi đo RVC</strong>
+  Giọng nhân bản mặc định lấy nền TTS là giọng nữ. Với người nói mục tiêu là nam, cần đổi giọng nền sang <code>vi-VN-NamMinhNeural</code> trong trang hồ sơ giọng nói. Chuyển chéo giới tính làm giảm độ tự nhiên và độ giống giọng, nên nếu không đổi thì số MOS và UTMOS đo được là của cấu hình sai. Đổi giọng nền không cần huấn luyện lại.
+</div>
+
+<h2 id="chayl">9. Chạy lại toàn bộ</h2>
+<h3>Cài môi trường đo</h3>
+<pre><code>cd clone-voice-station
+python -m venv .venv-eval
+.venv-eval\Scripts\python -m pip install numpy scipy speechbrain librosa pandas
+.venv-eval\Scripts\python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+.venv-eval\Scripts\python -m pip install -e ..\clone-voice-client
+git clone https://github.com/gabrielmittag/NISQA.git tools\NISQA
+.venv-eval\Scripts\python tools\eval_voice_quality.py --check</code></pre>
+<h3>Chạy từng thí nghiệm</h3>
+<pre><code>REM TN1 - kiem chung SNR, khong can mang
+.venv-eval\Scripts\python experiments\validate_snr_estimator.py
+
+REM TN2 - cat ban thu (can endpoint ASR)
+python tools\split_recording.py "tools\legal_testset\Thoại test.m4a" ^
+    --sentences tools\legal_testset\questions_vi.txt --align-asr ^
+    --out tools\legal_testset\set30
+
+REM TN3 - WER
+python tools\eval_stt_wer.py tools\legal_testset\set30 --language vi --out wer.csv
+
+REM Chua chay - can sinh audio truoc
+.venv-eval\Scripts\python tools\gen_voice_testset.py --list-profiles --external-user-id 18
+.venv-eval\Scripts\python tools\eval_voice_quality.py ^
+    --system rvc_out\ --baseline f5_out\ --speaker-refs tools\legal_testset\set30 ^
+    --nisqa-dir tools\NISQA --out results.csv</code></pre>
+
+<h2 id="log">10. Danh mục log</h2>
+<table>
+  <tr><th>File</th><th>Nội dung</th></tr>
+  <tr><td><code>experiments/logs/snr_validation.txt</code></td><td>Kết quả TN1</td></tr>
+  <tr><td><code>experiments/logs/wer_legal_set30.csv</code></td><td>TN3, từng clip: WER, số lỗi theo loại, thời lượng, độ trễ, transcript tham chiếu và nhận dạng, danh sách phép sửa</td></tr>
+  <tr><td><code>experiments/logs/wer_legal_set30_summary.json</code></td><td>TN3, tổng hợp kèm thời điểm chạy và tên engine</td></tr>
+  <tr><td><code>experiments/validate_snr_estimator.py</code></td><td>Script sinh lại TN1</td></tr>
+  <tr><td><code>tools/legal_testset/questions_vi.txt</code></td><td>30 câu gốc</td></tr>
+  <tr><td><code>tools/legal_testset/set30/</code></td><td>30 clip kèm transcript</td></tr>
+</table>
+<footer>
+  Số liệu trên trang này sinh ra từ các script trong <code>tools/</code> và <code>experiments/</code>. Khi chạy lại mà kết quả khác, ưu tiên tin file log kèm thời điểm chạy trong <code>experiments/logs/</code>.
+</footer>
+</main>
+</div>
+
+</body>
+</html>

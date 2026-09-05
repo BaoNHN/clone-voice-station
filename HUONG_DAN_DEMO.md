@@ -16,6 +16,7 @@
 8. [Kiến Trúc Kỹ Thuật](#8-kiến-trúc-kỹ-thuật)
 9. [Xử Lý Sự Cố](#9-xử-lý-sự-cố)
 10. [Demo Công Khai Qua Ngrok (Tuỳ Chọn)](#10-demo-công-khai-qua-ngrok-tuỳ-chọn)
+11. [Đo Chất Lượng Giọng Nói (Đánh Giá Luận Văn)](#11-đo-chất-lượng-giọng-nói-đánh-giá-luận-văn)
 
 ---
 
@@ -427,6 +428,94 @@ Nếu muốn người ngoài truy cập thẳng giao diện chat/demo của `rag
 - Mỗi `start_ngrok.py` cần `NGROK_AUTHTOKEN` riêng (hoặc dùng chung 1 token cho nhiều tunnel nếu gói ngrok cho phép).
 - Tunnel ngrok miễn phí đổi URL mỗi lần khởi động lại — cần lặp lại Bước 2 (và restart app khách) mỗi lần Bước 1 chạy lại.
 - Không hardcode authtoken vào file — dùng biến môi trường (xem comment đầu mỗi `start_ngrok.py`).
+
+---
+
+## 11. Đo Chất Lượng Giọng Nói (Đánh Giá Luận Văn)
+
+> **Số liệu đã đo nằm ở `NHAT_KY_THI_NGHIEM.html`** — mở bằng trình duyệt. Trang đó ghi kết quả từng thí nghiệm, điều kiện đo, giới hạn đã biết, và lệnh chạy lại. Log thô ở `experiments/logs/`. Mục này chỉ hướng dẫn thao tác.
+
+Hai script trong `tools/` phục vụ phần đánh giá khách quan của luận văn (Mục 6.1 Bảng 8, Mục 6.5):
+
+| Script | Việc |
+|---|---|
+| `tools/gen_voice_testset.py` | Sinh bộ audio ghép cặp: cùng một danh sách câu, đọc qua **TTS + RVC** và qua **F5-TTS baseline**; đồng thời ghi lại độ trễ `/api/speak` từng câu |
+| `tools/eval_voice_quality.py` | Chấm SNR (ITU-T P.56), UTMOS, NISQA, ECAPA cosine trên bộ audio đó |
+| `tools/eval_stt_wer.py` | Chấm WER + độ trễ của đường STT (đã có từ trước) |
+
+### 11.1 Chuẩn Bị Môi Trường
+
+SNR chỉ cần `numpy` + `scipy` nên chạy được bằng Python thường. UTMOS/NISQA/ECAPA cần `torch`, `torchaudio`, `speechbrain` — **cài vào venv riêng** để không đụng môi trường đang chạy station (torchaudio kéo theo lệch phiên bản với torch, và speechbrain nâng `huggingface_hub`):
+
+```bash
+cd clone-voice-station
+python -m venv .venv-eval
+.venv-eval/Scripts/python -m pip install numpy scipy speechbrain librosa pandas
+.venv-eval/Scripts/python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+.venv-eval/Scripts/python -m pip install -e ../clone-voice-client
+
+# NISQA là source checkout, không phải package trên PyPI (weights đi kèm repo)
+git clone https://github.com/gabrielmittag/NISQA.git tools/NISQA
+
+# Kiểm tra metric nào đã sẵn sàng trước khi chạy thật
+.venv-eval/Scripts/python tools/eval_voice_quality.py --check
+```
+
+`--check` in ra đúng 4 dòng trạng thái. Metric nào thiếu thư viện sẽ báo `UNAVAILABLE` kèm lý do và **bị bỏ qua**, phần còn lại vẫn chạy bình thường.
+
+> `venv` tự sinh `.gitignore` chứa `*`, và `.venv-eval/` + `tools/NISQA/` đã có trong `.gitignore` của repo, nên không lọt vào git.
+
+### 11.2 Sinh Bộ Test
+
+Chuẩn bị `answers.txt` — **mỗi dòng một câu trả lời** (không phải câu hỏi: phần đánh giá chấm audio mà trợ lý đọc ra). Sau đó xem có những profile nào:
+
+```bash
+.venv-eval/Scripts/python tools/gen_voice_testset.py --list-profiles --external-user-id u1
+```
+
+Chọn 2 profile: một profile `kind=cloned, status=ready` (hệ thống TTS + RVC) và một profile có `base_tts_voice=f5tts:default` (baseline). Rồi sinh 2 thư mục:
+
+```bash
+# Hệ thống: TTS + RVC
+.venv-eval/Scripts/python tools/gen_voice_testset.py \
+    --texts answers.txt --external-user-id u1 --profile-id 12 --out rvc_out/
+
+# Baseline: F5-TTS-Vietnamese-ViVoice
+.venv-eval/Scripts/python tools/gen_voice_testset.py \
+    --texts answers.txt --external-user-id u1 --profile-id 3 --out f5_out/
+```
+
+File được đặt tên theo số dòng (`001.wav`, `002.wav`, …) nên 2 thư mục ghép cặp theo tên. Mỗi thư mục có thêm `latency.csv` (độ trễ `/api/speak` từng câu — số liệu cho RQ3).
+
+**Cần thêm `speaker_refs/`**: vài bản ghi giọng thật của người nói mục tiêu, **không nằm trong tập đã dùng để train RVC**. Nếu lấy lại chính file train thì ECAPA sẽ đo mức độ mô hình học thuộc dữ liệu cũ, không phải khả năng tổng quát hoá.
+
+### 11.3 Chạy Đo
+
+```bash
+# Đầy đủ 4 metric + so với baseline (đây là dạng chạy phục vụ RQ2)
+.venv-eval/Scripts/python tools/eval_voice_quality.py \
+    --system rvc_out/ --baseline f5_out/ --speaker-refs speaker_refs/ \
+    --nisqa-dir tools/NISQA --out results.csv
+
+# Chỉ SNR, chạy bằng Python thường, không cần cài gì
+python tools/eval_voice_quality.py --system rvc_out/
+```
+
+Kết quả in ra dạng verdict theo Bảng 8: SNR so ngưỡng 20 dB (chỉ là **ngưỡng sàng lọc artefact**, không phải chuẩn ngành), còn UTMOS/NISQA/ECAPA so **tương đối với baseline**. `results.csv` lưu số liệu từng file.
+
+### 11.4 Hai Điều Dễ Đo Sai
+
+**Cắt đoạn thông báo AI ở đầu file.** `engine/voice_engine.py` ghép `[clip thông báo AI] + [350 ms im lặng] + [nội dung RVC]` cho mọi output có RVC (yêu cầu của Luật 134/2025/QH15). Clip thông báo đó do **edge-TTS đọc, không qua RVC**. Nếu chấm cả file thì ECAPA bị kéo về phía giọng base — tức là làm hỏng đúng con số dùng để chứng minh RQ2. Script tự dò khoảng lặng 350 ms và chỉ chấm phần sau nó; cột `trimmed_s` trong CSV cho bạn kiểm tra lại.
+
+**File không có prefix nghĩa là RVC đã không chạy.** Khi Colab offline, `/api/speak` trả TTS thường (mp3, không có thông báo). File như vậy bị đánh dấu `NO-RVC` và **loại khỏi trung bình**, để một lần fallback thầm lặng không làm đẹp số liệu. Nếu thấy báo `NO-RVC`, bật lại Colab và sinh lại đúng những file đó.
+
+### 11.5 Đo WER (đường STT)
+
+```bash
+python tools/eval_stt_wer.py path/to/testset/ --language vi --out wer.csv
+```
+
+Bộ test là thư mục chứa từng cặp cùng tên: file audio + file `.txt` chứa transcript chuẩn.
 
 ---
 
