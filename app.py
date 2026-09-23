@@ -49,7 +49,7 @@ from database.database import (
     get_published_stt_adapter_for_client,
     set_default_stt_adapter, unset_default_stt_adapter, get_default_stt_adapter,
 )
-from voice import rvc_client, stt, stt_adapter_infer
+from voice import rvc_client, stt_adapter_infer, stt_segmented
 from voice.scripts import get_scripts
 from engine import voice_engine, realism_engine, stt_train_engine
 from engine.server_log import read_recent_lines, get_logger
@@ -791,11 +791,9 @@ async def transcribe_route(
     Otherwise, tries the manager's system-wide default adapter if one is set
     (see /manager/stt/adapters/{id}/set-default) -- a manager-owned adapter
     that isn't tied to any single client_id. Otherwise -- or if either adapter
-    fails to load/run -- tries the Colab-hosted PhoWhisper endpoint
-    (Vietnamese-tuned, see voice/rvc_client.py's transcribe_remote() and
-    colab/voice_server.ipynb) and falls back to the local, CPU-only
-    openai-whisper model (voice/stt.py) whenever Colab is unset/unreachable —
-    same degrade-gracefully contract as /api/speak's RVC conversion."""
+    fails to load/run -- falls through to voice/stt_segmented.py's
+    remote-then-local fallback (Colab PhoWhisper, then local openai-whisper).
+    Full rationale for the segmentation: ai_change_log.txt."""
     audio_bytes = await audio.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Không có dữ liệu âm thanh.")
@@ -813,10 +811,10 @@ async def transcribe_route(
             logger.warning(f"[STT-adapter] Adapter #{adapter['id']} lỗi, dùng model gốc thay thế: {e}")
 
     if result is None:
-        result = await asyncio.to_thread(rvc_client.transcribe_remote, audio_bytes, mime, language or None)
-    if result is None:
         try:
-            result = await asyncio.to_thread(stt.transcribe, audio_bytes, mime, language or None)
+            result = await asyncio.to_thread(stt_segmented.transcribe_long, audio_bytes, mime, language or None)
+        except ValueError as e:
+            raise HTTPException(status_code=413, detail=str(e))
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Không thể chuyển giọng nói thành văn bản: {e}")
 
