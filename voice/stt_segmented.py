@@ -13,7 +13,7 @@ from voice import rvc_client, stt
 
 logger = logging.getLogger("voice-station")
 
-SEGMENT_MS = int(os.getenv("STT_SEGMENT_MS", "60000"))                     # 1 minute per segment
+SEGMENT_MS = int(os.getenv("STT_SEGMENT_MS", "25000"))                     # under Whisper's 30s single-pass window (see ai_change_log.txt)
 MAX_DURATION_MS = int(os.getenv("STT_MAX_DURATION_MS", str(10 * 60_000)))  # 10 minutes
 
 
