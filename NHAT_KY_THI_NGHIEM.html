@@ -149,9 +149,10 @@
     <li><a href="#tn4">5. TN4: Gate LoRA Tier 2</a></li>
     <li><a href="#tn5">6. TN5: Huấn luyện RVC</a></li>
     <li><a href="#tn6">7. TN6: Pilot đầu tiên</a></li>
-    <li><a href="#chuachay">8. Ngoài phạm vi luận văn</a></li>
-    <li><a href="#chayl">9. Chạy lại</a></li>
-    <li><a href="#log">10. Danh mục log</a></li>
+    <li><a href="#tn7">8. TN7: Speaker similarity đa profile</a></li>
+    <li><a href="#chuachay">9. Ngoài phạm vi luận văn</a></li>
+    <li><a href="#chayl">10. Chạy lại</a></li>
+    <li><a href="#log">11. Danh mục log</a></li>
   </ul>
 </nav>
 <main>
@@ -164,7 +165,7 @@
   <strong class="label">Quy mô</strong>
   Đây là đo ở quy mô phòng thí nghiệm. Bộ test ASR có 30 câu, một người nói, đọc theo văn bản, thu trong phòng yên tĩnh bằng một thiết bị. Các thí nghiệm RVC chạy trên Colab bậc miễn phí. Không có phép đo nào ở đây đủ để kết luận về hành vi khi triển khai thật: thiếu đa dạng người nói, thiếu nói tự nhiên, thiếu điều kiện nhiễu.
 </div>
-<p>Mỗi mục dưới đây ghi rõ thứ đã đo được. Khảo sát MOS, các metric dự đoán (UTMOS/NISQA/ECAPA) trên đầu ra RVC thật, so sánh với baseline F5-TTS, và bảng đo trễ trước/sau cho từng kỹ thuật T1–T4 đều <strong>nằm ngoài phạm vi luận văn theo quyết định đã ghi ở Chương 6 và 7</strong>. Đây không phải việc còn dang dở, xem mục 8.</p>
+<p>Mỗi mục dưới đây ghi rõ thứ đã đo được. Khảo sát MOS, các metric dự đoán (UTMOS/NISQA/ECAPA) trên đầu ra RVC thật, so sánh với baseline F5-TTS, và bảng đo trễ trước/sau cho từng kỹ thuật T1–T4 đều <strong>nằm ngoài phạm vi luận văn theo quyết định đã ghi ở Chương 6 và 7</strong>. Đây không phải việc còn dang dở, xem mục 9.</p>
 
 <h2 id="moitruong">1. Môi trường đo</h2>
 <p>Các metric neural cài trong virtualenv riêng <code>.venv-eval</code>, tách khỏi môi trường chạy dịch vụ. Lý do là <code>torchaudio</code> lệch phiên bản với <code>torch</code> đang dùng, và <code>speechbrain</code> nâng <code>huggingface_hub</code> lên bản mới hơn thứ các thành phần khác đang phụ thuộc.</p>
@@ -303,9 +304,27 @@
 <p>Cả hai con số độ trễ đều vượt xa mục tiêu 4 giây của RQ3. Đây là khoảng cách mà kỹ thuật T2 ở Mục 6.3 nhắm tới, và nó được ghi nhận thay vì bỏ qua.</p>
 <h3>Độ nhạy của baseline F5-TTS</h3>
 <p>Endpoint baseline chạy thông suốt trong lần thử này nhưng lộ một điểm phương pháp luận đáng ghi lại. Clip tham chiếu dài 20.6 giây cho ra audio bị nén và nhanh bất thường: 2.01 giây cho câu 13 từ, khoảng 6.5 từ/giây. Clip tham chiếu sạch dài 7.0 giây với transcript khớp chính xác cho ra 3.82 giây, khoảng 3.4 từ/giây, cho cùng văn bản cần sinh.</p>
-<p>Kết luận rút ra: clip tham chiếu phải chọn đúng độ dài 6 đến 10 giây theo tài liệu của model, không lấy tuỳ tiện từ audio dài hơn. Ghi lại để nếu về sau có ai (kể cả chính tác giả) chạy lại so sánh với F5-TTS thì không lặp lại lỗi này. Bản thân phép so sánh đó không nằm trong phạm vi đo của luận văn (xem mục 8).</p>
+<p>Kết luận rút ra: clip tham chiếu phải chọn đúng độ dài 6 đến 10 giây theo tài liệu của model, không lấy tuỳ tiện từ audio dài hơn. Ghi lại để nếu về sau có ai (kể cả chính tác giả) chạy lại so sánh với F5-TTS thì không lặp lại lỗi này. Bản thân phép so sánh đó không nằm trong phạm vi đo của luận văn (xem mục 9).</p>
 
-<h2 id="chuachay">8. Ngoài phạm vi luận văn (không phải việc còn dang dở)</h2>
+<h2 id="tn7">8. TN7: Speaker similarity qua nhiều profile</h2>
+<p>Mục 6.4.2 của luận văn ban đầu chỉ có một clip tổng hợp (<code>voice_01.wav</code>), tác giả tự chấm cảm quan 4/5 sau một lần nghe — một người chấm, một mẫu, không đủ ý nghĩa thống kê. Thí nghiệm này mở rộng bằng một phép đo khách quan: cosine similarity giữa embedding giọng nói (Resemblyzer/GE2E, cùng cơ chế "realism test" của dashboard quản trị, Mục 6.2.4), chạy trên cả 3 profile đang ở trạng thái <code>ready</code> cùng lúc, mỗi profile so với các mẫu gốc do chính người dùng đó tải lên.</p>
+<table>
+  <tr><th>Profile</th><th>Số mẫu gốc</th><th>Similarity (so với centroid)</th><th>Đánh giá tự động</th></tr>
+  <tr><td>TestGiong1 (nam)</td><td>5</td><td>84.3%</td><td>Khá giống</td></tr>
+  <tr><td>RVC Test Voice 2</td><td>6</td><td>81.3%</td><td>Khá giống</td></tr>
+  <tr><td>GiọngNữ (nữ)</td><td>5</td><td>80.9%</td><td>Khá giống</td></tr>
+</table>
+<p>Trung bình 82.2% trên cả 3 profile (khoảng 80.9–84.3%), tổng cộng 16 phép so sánh mẫu đơn lẻ. Chạy qua đường RVC fallback cục bộ (<code>voice/rvc_local.py</code>) — không có Colab tunnel đang sống lúc chạy — chứ không qua Colab; log ghi rõ thời gian suy luận từng profile (<code>timing_sec.rvc_local</code>).</p>
+<div class="box warn">
+  <strong class="label">Đây vẫn là phép đo tự động, không phải MOS</strong>
+  Similarity ở đây là embedding-similarity tự động (GE2E d-vector), không phải đánh giá cảm quan của người nghe thật. Mỗi profile chỉ tổng hợp một câu test duy nhất (<code>DEFAULT_TEST_TEXT</code> trong <code>engine/realism_engine.py</code>). Khảo sát MOS đa người nghe vẫn nằm ngoài phạm vi luận văn — xem mục 9.
+</div>
+<p>Chạy lại có thể ra số hơi khác (chênh khoảng 0.2–1 điểm phần trăm) do tổng hợp TTS/RVC không hoàn toàn xác định — đã quan sát thực tế: lần chạy nháp đầu (2026-09-23, trước khi script được đưa vào repo) ra 84.1/82.1/80.5%; lần chạy chính thức này (2026-09-24, script đã ở <code>experiments/</code>) ra 84.3/81.3/80.9%. Cùng kết luận cả hai lần: cả 3 profile đều rơi vào dải "Khá giống".</p>
+<pre><code>cd clone-voice-station
+python experiments/rvc_speaker_similarity.py &gt; experiments/logs/rvc_similarity_check.txt</code></pre>
+<p>Log: <code>experiments/logs/rvc_similarity_check.txt</code> (toàn bộ output kèm timing) và <code>experiments/logs/rvc_similarity_check.json</code> (số liệu có cấu trúc, per-sample).</p>
+
+<h2 id="chuachay">9. Ngoài phạm vi luận văn (không phải việc còn dang dở)</h2>
 <p>Bốn mục dưới đây từng được cân nhắc khi phát triển nhưng Chương 6.2.4 và 7.1 của luận văn đã <strong>chốt là ngoài phạm vi</strong>, không phải "sẽ đo sau". Lý do chung: luận văn một tác giả, một người nói mục tiêu, không đủ nguồn lực để làm một khảo sát cảm quan quy mô lớn (nhiều người nói, nhiều người nghe, nhiều điều kiện thu) đủ sức cho ra kết luận tổng quát. Làm nửa vời còn tệ hơn không làm. Công cụ đo (TN1, và <code>tools/eval_voice_quality.py</code>) vẫn được xây dựng và kiểm chứng đầy đủ, chỉ là không áp dụng lên một nghiên cứu cảm quan diện rộng.</p>
 <table>
   <tr><th>Mục</th><th>Vì sao ngoài phạm vi</th></tr>
@@ -319,7 +338,7 @@
   Giọng nhân bản mặc định lấy nền TTS là giọng nữ. Với người nói mục tiêu là nam, cần đổi giọng nền sang <code>vi-VN-NamMinhNeural</code> trong trang hồ sơ giọng nói trước khi sinh audio để đo. Nếu không, số liệu đo được là của cấu hình chuyển chéo giới tính, không phản ánh đúng chất lượng thật. Đổi giọng nền không cần huấn luyện lại.
 </div>
 
-<h2 id="chayl">9. Chạy lại toàn bộ</h2>
+<h2 id="chayl">10. Chạy lại toàn bộ</h2>
 <h3>Cài môi trường đo</h3>
 <pre><code>cd clone-voice-station
 python -m venv .venv-eval
@@ -340,13 +359,18 @@ python tools\split_recording.py "tools\legal_testset\Thoại test.m4a" ^
 REM TN3 - WER
 python tools\eval_stt_wer.py tools\legal_testset\set30 --language vi --out wer.csv
 
+REM TN7 - speaker similarity da profile (khong can clone-voice-station dang chay --
+REM script doc thang tu DB va goi RVC local trong tien trinh cua chinh no)
+python experiments\rvc_speaker_similarity.py ^
+    > experiments\logs\rvc_similarity_check.txt
+
 REM Chua chay - can sinh audio truoc
 .venv-eval\Scripts\python tools\gen_voice_testset.py --list-profiles --external-user-id 18
 .venv-eval\Scripts\python tools\eval_voice_quality.py ^
     --system rvc_out\ --baseline f5_out\ --speaker-refs tools\legal_testset\set30 ^
     --nisqa-dir tools\NISQA --out results.csv</code></pre>
 
-<h2 id="log">10. Danh mục log</h2>
+<h2 id="log">11. Danh mục log</h2>
 <table>
   <tr><th>File</th><th>Nội dung</th></tr>
   <tr><td><code>experiments/logs/snr_validation.txt</code></td><td>Kết quả TN1</td></tr>
@@ -355,6 +379,9 @@ REM Chua chay - can sinh audio truoc
   <tr><td><code>experiments/validate_snr_estimator.py</code></td><td>Script sinh lại TN1</td></tr>
   <tr><td><code>tools/legal_testset/questions_vi.txt</code></td><td>30 câu gốc</td></tr>
   <tr><td><code>tools/legal_testset/set30/</code></td><td>30 clip kèm transcript</td></tr>
+  <tr><td><code>experiments/logs/rvc_similarity_check.txt</code></td><td>TN7, toàn bộ output kèm timing từng profile</td></tr>
+  <tr><td><code>experiments/logs/rvc_similarity_check.json</code></td><td>TN7, số liệu có cấu trúc: score_pct theo centroid + per-sample</td></tr>
+  <tr><td><code>experiments/rvc_speaker_similarity.py</code></td><td>Script sinh lại TN7</td></tr>
 </table>
 <footer>
   Số liệu trên trang này sinh ra từ các script trong <code>tools/</code> và <code>experiments/</code>. Khi chạy lại mà kết quả khác, ưu tiên tin file log kèm thời điểm chạy trong <code>experiments/logs/</code>.

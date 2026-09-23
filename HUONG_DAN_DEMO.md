@@ -256,6 +256,7 @@ Tất cả các endpoint dưới đây yêu cầu header `X-Api-Key`, trừ khi 
 | `/api/profiles/{id}/samples/{sample_id}` | DELETE | `?external_user_id=` — xoá 1 mẫu ghi âm |
 | `/api/profiles/{id}/train` | POST | `{external_user_id}` — bắt đầu huấn luyện (chạy nền) |
 | `/api/profiles/{id}/status` | GET | `?external_user_id=` — trạng thái huấn luyện |
+| `/api/transcribe` | POST | multipart: `audio` (file), `language?` — chuyển giọng nói thành văn bản, trả `{text, language, engine, segments}` |
 | `/api/speak` | POST | `{external_user_id, text, profile_id}` — đọc to, trả về audio bytes |
 | `/api/admin/voice_models` | GET | Mọi giọng riêng **của client bạn** (không thấy client khác) |
 | `/api/admin/voice_models/{id}/retrain` | POST | Huấn luyện lại một giọng thuộc client bạn |
@@ -268,6 +269,19 @@ Tất cả các endpoint dưới đây yêu cầu header `X-Api-Key`, trừ khi 
 | `/api/notifications/{id}/ack` | POST | Xác nhận đã nhận, không gửi lại nữa |
 
 > **Lưu ý quan trọng:** `/api/admin/voice_models*` là API "admin của client bạn" (VD `rag-legal-assistant`'s trang `/admin/voice_models` gọi các route này) — khác với trang **dashboard quản trị của clone-voice-station** (mục 4), vốn dùng tài khoản manager riêng và có thể thấy/thao tác **mọi** client.
+
+### 6.8 Kiểm Tra Nhanh STT (Smoke Test)
+
+Sau khi clone-voice-station đang chạy (mục 3), kiểm tra nhanh đường `/api/transcribe` hoạt động đúng mà không cần qua trình duyệt/mic:
+
+```bash
+cd clone-voice-station
+python tools/test_stt.py path/to/audio.wav --language vi
+```
+
+In ra văn bản nhận diện, engine thực sự phục vụ request (`phowhisper:<model>` qua Colab, `stt-adapter:<id>:<model>` nếu có adapter Tier 2 đã publish, hoặc `phowhisper-local:<model>` khi fallback local), và độ trễ round-trip. Cần API key — script tự tìm theo thứ tự: `--api-key`, file `voice_station_key.txt` trong thư mục hiện tại, rồi biến môi trường `VOICE_STATION_API_KEY`.
+
+Bản ghi dài hơn 25 giây được `voice/stt_segmented.py` tự động cắt thành từng đoạn 25s và ghép lại, để tránh giới hạn cửa sổ 30 giây một lần của Whisper (xem `ai_change_log.txt`); bản ghi quá 10 phút bị từ chối (`HTTP 413`).
 
 ---
 
@@ -442,6 +456,7 @@ Hai script trong `tools/` phục vụ phần đánh giá khách quan của luậ
 | `tools/gen_voice_testset.py` | Sinh bộ audio ghép cặp: cùng một danh sách câu, đọc qua **TTS + RVC** và qua **F5-TTS baseline**; đồng thời ghi lại độ trễ `/api/speak` từng câu |
 | `tools/eval_voice_quality.py` | Chấm SNR (ITU-T P.56), UTMOS, NISQA, ECAPA cosine trên bộ audio đó |
 | `tools/eval_stt_wer.py` | Chấm WER + độ trễ của đường STT (đã có từ trước) |
+| `experiments/rvc_speaker_similarity.py` | Chấm speaker-similarity (Resemblyzer, cùng cơ chế "realism test" của dashboard, Mục 6.2.4) trên **mọi** profile `status=ready` cùng lúc — không cần chuẩn bị `answers.txt`/`speaker_refs/`, tự lấy mẫu gốc của từng profile từ DB |
 
 ### 11.1 Chuẩn Bị Môi Trường
 

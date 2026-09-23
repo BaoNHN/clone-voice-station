@@ -1,0 +1,111 @@
+[
+  {
+    "profile": "TestGiong1",
+    "profile_id": 8,
+    "speaker_id": "client1_user18_profile8",
+    "score_pct": 84.3,
+    "verdict": "Khá giống",
+    "n_samples": 5,
+    "sample_scores": [
+      {
+        "sample_id": 1,
+        "score_pct": 86.1
+      },
+      {
+        "sample_id": 2,
+        "score_pct": 82.0
+      },
+      {
+        "sample_id": 3,
+        "score_pct": 85.2
+      },
+      {
+        "sample_id": 4,
+        "score_pct": 82.3
+      },
+      {
+        "sample_id": 5,
+        "score_pct": 81.9
+      }
+    ],
+    "timing_sec": {
+      "tts": 2.21,
+      "rvc_local": 41.29,
+      "embed": 2.59
+    }
+  },
+  {
+    "profile": "RVC Test Voice 2",
+    "profile_id": 11,
+    "speaker_id": "client1_userrvc-test-user-001_profile11",
+    "score_pct": 81.3,
+    "verdict": "Khá giống",
+    "n_samples": 6,
+    "sample_scores": [
+      {
+        "sample_id": 12,
+        "score_pct": 83.8
+      },
+      {
+        "sample_id": 13,
+        "score_pct": 79.1
+      },
+      {
+        "sample_id": 14,
+        "score_pct": 82.6
+      },
+      {
+        "sample_id": 15,
+        "score_pct": 78.3
+      },
+      {
+        "sample_id": 16,
+        "score_pct": 79.3
+      },
+      {
+        "sample_id": 17,
+        "score_pct": 78.9
+      }
+    ],
+    "timing_sec": {
+      "tts": 1.03,
+      "rvc_local": 5.28,
+      "embed": 0.67
+    }
+  },
+  {
+    "profile": "GiọngNữ",
+    "profile_id": 12,
+    "speaker_id": "client1_user2_profile12",
+    "score_pct": 80.9,
+    "verdict": "Khá giống",
+    "n_samples": 5,
+    "sample_scores": [
+      {
+        "sample_id": 18,
+        "score_pct": 71.2
+      },
+      {
+        "sample_id": 19,
+        "score_pct": 76.8
+      },
+      {
+        "sample_id": 20,
+        "score_pct": 81.2
+      },
+      {
+        "sample_id": 21,
+        "score_pct": 78.7
+      },
+      {
+        "sample_id": 22,
+        "score_pct": 83.9
+      }
+    ],
+    "timing_sec": {
+      "tts": 0.9,
+      "rvc_local": 4.91,
+      "embed": 0.82
+    }
+  }
+]

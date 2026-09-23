@@ -68,6 +68,17 @@ python app.py
 
 `clone-voice-client` không có Terminal riêng — nó chạy *bên trong* tiến trình của Terminal 2 và 3 (import như một thư viện Python bình thường), không phải một service độc lập.
 
+### Kiểm tra nhanh STT (smoke test)
+
+Sau khi Terminal 1 đã chạy, kiểm tra nhanh đường `/api/transcribe` mà không cần qua trình duyệt/mic:
+
+```bash
+cd clone-voice-station
+python tools/test_stt.py path/to/audio.wav --language vi
+```
+
+In ra văn bản nhận diện, engine đã phục vụ (Colab / adapter Tier 2 / fallback local), và độ trễ. Cần `voice_station_key.txt` hoặc biến môi trường `VOICE_STATION_API_KEY`. Chi tiết: mục 6.8 của `clone-voice-station/HUONG_DAN_DEMO.md`.
+
 ## 3. Demo công khai qua ngrok (tuỳ chọn)
 
 Mỗi app runnable (`clone-voice-station`, `rag-legal-assistant`, `voice-lab-example`) có sẵn `start_ngrok.py` riêng, lộ đúng port của app đó. Cần `NGROK_AUTHTOKEN` (lấy miễn phí tại https://dashboard.ngrok.com/tunnels/authtokens) — không hardcode token vào file, dùng biến môi trường.

@@ -1,0 +1,133 @@
+Skipping import of cpp extensions due to incompatible torch version 2.6.0+cu124 for torchao version 0.16.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+2026-09-24 00:13:13 INFO [RVC-local] In-process VC initialized, device=cuda:0
+D:\anaconda3\envs\rag_env\Lib\site-packages\torch\nn\utils\weight_norm.py:143: FutureWarning: `torch.nn.utils.weight_norm` is deprecated in favor of `torch.nn.utils.parametrizations.weight_norm`.
+  WeightNorm.apply(module, name, dim)
+`torch_dtype` is deprecated! Use `dtype` instead!
+D:\anaconda3\envs\rag_env\Lib\site-packages\webrtcvad.py:1: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+D:\anaconda3\envs\rag_env\Lib\site-packages\resemblyzer\audio.py:27: UserWarning: PySoundFile failed. Trying audioread instead.
+  wav, source_sr = librosa.load(str(fpath_or_wav), sr=None)
+D:\anaconda3\envs\rag_env\Lib\site-packages\librosa\core\audio.py:184: FutureWarning: librosa.core.audio.__audioread_load
+	Deprecated as of librosa version 0.10.0.
+	It will be removed in librosa version 1.0.
+  y, sr_native = __audioread_load(path, offset, duration, dtype)
+D:\anaconda3\envs\rag_env\Lib\site-packages\torch\nn\utils\weight_norm.py:143: FutureWarning: `torch.nn.utils.weight_norm` is deprecated in favor of `torch.nn.utils.parametrizations.weight_norm`.
+  WeightNorm.apply(module, name, dim)
+Found 3 ready profile(s) with on-disk samples
+--- Profile 8 (TestGiong1), 5 sample(s) ---
+Loaded the voice encoder model on cuda in 0.06 seconds.
+{
+  "profile": "TestGiong1",
+  "profile_id": 8,
+  "speaker_id": "client1_user18_profile8",
+  "score_pct": 84.3,
+  "verdict": "Kh\u00e1 gi\u1ed1ng",
+  "n_samples": 5,
+  "sample_scores": [
+    {
+      "sample_id": 1,
+      "score_pct": 86.1
+    },
+    {
+      "sample_id": 2,
+      "score_pct": 82.0
+    },
+    {
+      "sample_id": 3,
+      "score_pct": 85.2
+    },
+    {
+      "sample_id": 4,
+      "score_pct": 82.3
+    },
+    {
+      "sample_id": 5,
+      "score_pct": 81.9
+    }
+  ],
+  "timing_sec": {
+    "tts": 2.21,
+    "rvc_local": 41.29,
+    "embed": 2.59
+  }
+}
+--- Profile 11 (RVC Test Voice 2), 6 sample(s) ---
+{
+  "profile": "RVC Test Voice 2",
+  "profile_id": 11,
+  "speaker_id": "client1_userrvc-test-user-001_profile11",
+  "score_pct": 81.3,
+  "verdict": "Kh\u00e1 gi\u1ed1ng",
+  "n_samples": 6,
+  "sample_scores": [
+    {
+      "sample_id": 12,
+      "score_pct": 83.8
+    },
+    {
+      "sample_id": 13,
+      "score_pct": 79.1
+    },
+    {
+      "sample_id": 14,
+      "score_pct": 82.6
+    },
+    {
+      "sample_id": 15,
+      "score_pct": 78.3
+    },
+    {
+      "sample_id": 16,
+      "score_pct": 79.3
+    },
+    {
+      "sample_id": 17,
+      "score_pct": 78.9
+    }
+  ],
+  "timing_sec": {
+    "tts": 1.03,
+    "rvc_local": 5.28,
+    "embed": 0.67
+  }
+}
+--- Profile 12 (GiọngNữ), 5 sample(s) ---
+{
+  "profile": "Gi\u1ecdngN\u1eef",
+  "profile_id": 12,
+  "speaker_id": "client1_user2_profile12",
+  "score_pct": 80.9,
+  "verdict": "Kh\u00e1 gi\u1ed1ng",
+  "n_samples": 5,
+  "sample_scores": [
+    {
+      "sample_id": 18,
+      "score_pct": 71.2
+    },
+    {
+      "sample_id": 19,
+      "score_pct": 76.8
+    },
+    {
+      "sample_id": 20,
+      "score_pct": 81.2
+    },
+    {
+      "sample_id": 21,
+      "score_pct": 78.7
+    },
+    {
+      "sample_id": 22,
+      "score_pct": 83.9
+    }
+  ],
+  "timing_sec": {
+    "tts": 0.9,
+    "rvc_local": 4.91,
+    "embed": 0.82
+  }
+}
+
+Mean centroid similarity across 3 profile(s): 82.2% (range 80.9-84.3%)
+
+Saved results to D:\hoc\project\clone-voice-station\experiments\logs\rvc_similarity_check.json
