@@ -85,6 +85,10 @@ peft>=0.11.0
 # required above).
 pydub>=0.25.1
 
+# pydub imports stdlib `audioop`, removed in Python 3.13 -- this backport
+# restores it. Needed on Python >=3.13 only, but harmless on older versions.
+audioop-lts>=0.2.1
+
 # STT test tooling (tools/test_stt.py, tools/eval_stt_wer.py) — same installable
 # SDK rag-legal-assistant uses, so these scripts exercise the real client path
 # instead of hand-rolled requests calls.
