@@ -75,10 +75,6 @@ URL public, dán vào app đang gọi service này:
 
 URL ngrok free đổi mỗi lần chạy lại start_ngrok.py -> phải dán lại.
 
-CẢNH BÁO: authtoken cũ từng bị hardcode trong start_ngrok.py và đã lọt
-vào lịch sử git (đã push lên GitHub) — phải revoke/rotate token đó tại
-https://dashboard.ngrok.com/tunnels/authtokens.
-
 --------------------------------------------------------------------------
 5. BACKEND RVC/PhoWhisper CHẠY TRÊN COLAB (tuỳ chọn, thay cho máy local)
 --------------------------------------------------------------------------
@@ -94,3 +90,37 @@ URL cloudflared in ra (không phải ngrok) -> dán vào manager dashboard:
 LƯU Ý: không được dừng/restart Colab runtime khi đang dùng — cloudflared
 sẽ đổi URL mới và phải dán lại. Tunnel free hết hạn sau vài giờ, phải
 chạy lại notebook + dán lại URL.
+
+--------------------------------------------------------------------------
+6. KIỂM TRA NHANH STT (SMOKE TEST)
+--------------------------------------------------------------------------
+Sau khi app.py (mục 1) đã chạy, kiểm tra nhanh /api/transcribe mà không
+cần qua trình duyệt/mic:
+
+    cd /d D:\hoc\project\clone-voice-station
+    python tools\test_stt.py path\to\audio.wav --language vi
+
+In ra văn bản nhận diện, engine đã phục vụ (phowhisper:<model> qua Colab,
+stt-adapter:<id>:<model> nếu có adapter Tier 2 đã publish, hoặc
+phowhisper-local:<model> khi fallback local), và độ trễ round-trip. Cần
+API key -- script tự tìm theo thứ tự: --api-key, file
+voice_station_key.txt trong thư mục hiện tại, rồi biến môi trường
+VOICE_STATION_API_KEY.
+
+Bản ghi dài hơn 25 giây được voice/stt_segmented.py tự động cắt thành
+từng đoạn 25s và ghép lại (tránh giới hạn cửa sổ 30s một lần của
+Whisper); bản ghi quá 10 phút bị từ chối (HTTP 413).
+
+--------------------------------------------------------------------------
+7. CHẤM SPEAKER SIMILARITY ĐA PROFILE (TN7, đánh giá luận văn)
+--------------------------------------------------------------------------
+Không cần app.py đang chạy -- script đọc thẳng DB + gọi RVC local trong
+tiến trình của chính nó:
+
+    cd /d D:\hoc\project\clone-voice-station
+    python experiments\rvc_speaker_similarity.py > experiments\logs\rvc_similarity_check.txt
+
+Chấm cosine similarity (Resemblyzer) giữa một clip tổng hợp và các mẫu
+gốc, cho MỌI voice profile đang status=ready cùng lúc. Kết quả lần chạy
+gần nhất: 3 profile, 84.3% / 81.3% / 80.9% (TB 82.2%), xem mục 8 (TN7)
+của NHAT_KY_THI_NGHIEM.html để đọc chi tiết + diễn giải.
