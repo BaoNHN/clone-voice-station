@@ -151,6 +151,7 @@
       <li><a href="#loi">7. Xử lý lỗi thường gặp</a></li>
       <li><a href="#danhgia">8. Đo chất lượng giọng nói (đánh giá luận văn)</a></li>
       <li><a href="#retest">9. Chạy lại các test case</a></li>
+      <li><a href="#local">10. Chạy theo đường local (không cần Colab)</a></li>
     </ul>
   </nav>
 
@@ -367,6 +368,29 @@ python tools\eval_stt_wer.py path\to\testset\ --language vi --out wer.csv</code>
     <div class="box ok">
       <strong class="label">Lưu ý khi chạy thử (2026-10-04, không bật Colab)</strong>
       <code>flow_02</code> cần Python của <code>rag_env</code> (<code>D:\anaconda3\envs\rag_env\python.exe</code>) vì mẫu <code>.webm</code> chỉ đọc được ở môi trường đó; <code>flow_04</code> tự đặt <code>KMP_DUPLICATE_LIB_OK</code>. Kết quả: <code>flow_04</code> base 41,6% / hotwords 38,0% / y khoa 52,2% / VLSP 41,4%; <code>flow_02</code> 84,3 / 80,4 / 80,9% (TB 81,9%, 16 cặp); <code>flow_05</code> khớp Table 11. <code>flow_03</code> đường local đo TB 12,8 s (ASR) và 11,2 s (speak), chậm hơn số trong luận văn vì máy đang gặp vấn đề lúc chạy thử, không phải số cần thay. TC-07 (âm thanh im lặng): Table 5 ghi 422 là đúng (code trả 422 khi kết quả phiên âm rỗng). Khi chạy thử không có Colab, đường local PhoWhisper-small bịa ra chữ nên trả 200; PhoWhisper-large trên Colab trả rỗng nên ra 422 (đã thấy ở lần chạy thử trước).
+    </div>
+
+    <h2 id="local">10. Chạy theo đường local (không cần Colab)</h2>
+    <p>Các mục trước dùng đường có Colab (<code>rvc_endpoint</code> trỏ tới URL cloudflared/ngrok). Khi không có Colab, station tự fallback sang đường local:</p>
+    <table>
+      <tr><th>Thành phần</th><th>Có Colab</th><th>Không Colab (local)</th></tr>
+      <tr><td>STT <code>/api/transcribe</code></td><td>PhoWhisper-large trên Colab</td><td>PhoWhisper-small trong tiến trình station</td></tr>
+      <tr><td>Chuyển giọng RVC</td><td>Colab (T4)</td><td><code>voice/rvc_local.py</code> trong tiến trình station, cần model đã huấn luyện còn cache; không có thì trả TTS thường</td></tr>
+      <tr><td>TTS</td><td>edge-TTS</td><td>edge-TTS (cần Internet)</td></tr>
+      <tr><td>Huấn luyện RVC</td><td>Colab, ~44 phút / 200 epoch</td><td>Chạy được nhưng rất chậm, số epoch tự giảm khi không có GPU</td></tr>
+    </table>
+    <pre><code>python -c "from database.database import set_setting; set_setting('rvc_endpoint', '')"
+python app.py     # http://127.0.0.1:8090</code></pre>
+    <p>Không cần xoá endpoint để thử: các luồng <code>flow_01</code> (TC-03, TC-17) và <code>flow_03 --path local</code> tự trỏ endpoint tới địa chỉ không tới được rồi khôi phục lại ở cuối lần chạy.</p>
+    <p>Chạy lại bộ test ở chế độ này (bỏ qua phần cần Colab):</p>
+    <pre><code>python experiments/retest/flow_01_api_testcases.py     # TC-01, TC-02, TC-11 báo SKIP nếu thiếu điều kiện
+python experiments/retest/flow_03_latency.py --path local --n-asr 10 --n-tts 5
+python experiments/retest/flow_04_legal_wer.py --conditions base,hotwords,medical,vlsp
+python experiments/retest/flow_05_snr.py
+D:\anaconda3\envs\rag_env\python.exe experiments/retest/flow_02_speaker_similarity.py</code></pre>
+    <div class="box warn">
+      <strong class="label">Lưu ý</strong>
+      Lượt gọi đầu luôn chậm vì nạp model; <code>flow_02</code> phải dùng Python của <code>rag_env</code>; <code>flow_04</code> điều kiện <code>remote</code> và độ trễ qua Colab/ngrok (<code>flow_03 --path colab-local|colab-ngrok</code>) vẫn cần Colab.
     </div>
 
     <footer>

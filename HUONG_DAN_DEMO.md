@@ -560,6 +560,38 @@ TC-07 (âm thanh im lặng) có hai trường hợp, Table 5 ghi 422 là đúng 
 - Đường Colab (PhoWhisper-large): trả rỗng nên ra 422 (đã thấy ở lần chạy thử trước).
 - Đường local (PhoWhisper-small, chạy thử 2026-10-04 không bật Colab): model bịa ra chữ nên trả 200.
 
+## 13. Chạy Theo Đường Local (Không Cần Colab)
+
+Các mục trước dùng đường có Colab (`rvc_endpoint` trỏ tới URL cloudflared/ngrok). Khi không có Colab, station tự fallback sang đường local:
+
+| Thành phần | Có Colab | Không Colab (local) |
+|---|---|---|
+| STT `/api/transcribe` | PhoWhisper-large trên Colab | PhoWhisper-small trong tiến trình station |
+| Chuyển giọng RVC | Colab (T4) | `voice/rvc_local.py` trong tiến trình station, cần model đã huấn luyện còn cache; không có thì trả TTS thường |
+| TTS | edge-TTS | edge-TTS (cần Internet) |
+| Huấn luyện RVC | Colab, ~44 phút / 200 epoch | Chạy được nhưng rất chậm, số epoch tự giảm khi không có GPU |
+
+Cách chạy:
+
+```bash
+python -c "from database.database import set_setting; set_setting('rvc_endpoint', '')"
+python app.py     # http://127.0.0.1:8090
+```
+
+Không cần xoá endpoint để thử: các luồng `flow_01` (TC-03, TC-17) và `flow_03 --path local` tự trỏ endpoint tới địa chỉ không tới được rồi khôi phục lại ở cuối lần chạy.
+
+Chạy lại bộ test ở chế độ này (bỏ qua phần cần Colab):
+
+```bash
+python experiments/retest/flow_01_api_testcases.py     # TC-01, TC-02, TC-11 báo SKIP nếu thiếu điều kiện
+python experiments/retest/flow_03_latency.py --path local --n-asr 10 --n-tts 5
+python experiments/retest/flow_04_legal_wer.py --conditions base,hotwords,medical,vlsp
+python experiments/retest/flow_05_snr.py
+D:\anaconda3\envs\rag_env\python.exe experiments/retest/flow_02_speaker_similarity.py
+```
+
+Lưu ý: lượt gọi đầu luôn chậm vì nạp model; `flow_02` phải dùng Python của `rag_env`; `flow_04` điều kiện `remote` và độ trễ qua Colab/ngrok (`flow_03 --path colab-local|colab-ngrok`) vẫn cần Colab.
+
 ## Ghi Chú Thêm
 
 - Dữ liệu của mỗi client **tách biệt hoàn toàn** — client A không bao giờ thấy tên/giọng nói/thông báo của client B, kể cả qua API lẫn dashboard's cột Client (chỉ hiển thị cho manager, không lộ ra API của client khác).
