@@ -557,10 +557,8 @@ Lưu ý khi chạy thử (2026-10-04, không bật Colab): `flow_02` cần Pytho
 
 TC-07 (âm thanh im lặng) có hai trường hợp, Table 5 ghi 422 là đúng với code (422 khi kết quả phiên âm rỗng):
 
-- Đường Colab (PhoWhisper-large): nhiều khả năng trả rỗng nên ra 422, như lần đo trước (chưa kiểm chứng lại).
+- Đường Colab (PhoWhisper-large): trả rỗng nên ra 422 (đã thấy ở lần chạy thử trước).
 - Đường local (PhoWhisper-small, chạy thử 2026-10-04 không bật Colab): model bịa ra chữ nên trả 200.
-
-Để xác nhận, bật Colab rồi chạy `python experiments/retest/flow_01_api_testcases.py --only TC-07`.
 
 ## Ghi Chú Thêm
 
