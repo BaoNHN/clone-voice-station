@@ -553,7 +553,14 @@ Bộ luồng nằm ở `experiments/retest/`, mỗi luồng tái hiện một nh
 
 Điều kiện: station chạy ở `127.0.0.1:8090`, API key lấy từ `--api-key`, `VOICE_STATION_API_KEY` hoặc `voice_station_key.txt`. TC-01/02/11 cần adapter đã publish / Colab sống, nếu không luồng ghi `SKIP` kèm lý do (không ghi PASS giả). TC-08/09 dùng fault injection trong tiến trình (`--no-inprocess` để bỏ qua). `flow_04` cần `pip install -e ../clone-voice-client[local]` và danh sách 10 hotword trong `hotwords_legal.json` (kiểm tra lại trước khi báo số).
 
-Lưu ý khi chạy thử (2026-10-04, không bật Colab): `flow_02` cần Python của `rag_env` (`D:\anaconda3\envs\rag_env\python.exe`) vì mẫu `.webm` chỉ đọc được ở môi trường đó; `flow_04` tự đặt `KMP_DUPLICATE_LIB_OK`. Kết quả: `flow_04` base 41,6% / hotwords 38,0% / y khoa 52,2% / VLSP 41,4%; `flow_02` 84,3 / 80,4 / 80,9% (TB 81,9%, 16 cặp); `flow_05` khớp Table 11. TC-07 (âm thanh im lặng) trả 200 thay vì 422 khi chạy đường local PhoWhisper-small.
+Lưu ý khi chạy thử (2026-10-04, không bật Colab): `flow_02` cần Python của `rag_env` (`D:\anaconda3\envs\rag_env\python.exe`) vì mẫu `.webm` chỉ đọc được ở môi trường đó; `flow_04` tự đặt `KMP_DUPLICATE_LIB_OK`. Kết quả: `flow_04` base 41,6% / hotwords 38,0% / y khoa 52,2% / VLSP 41,4%; `flow_02` 84,3 / 80,4 / 80,9% (TB 81,9%, 16 cặp); `flow_05` khớp Table 11. `flow_03` đường local đo TB 12,8 s (ASR) và 11,2 s (speak), chậm hơn luận văn vì máy đang gặp vấn đề lúc chạy thử, không phải số cần thay.
+
+TC-07 (âm thanh im lặng) có hai trường hợp, Table 5 ghi 422 là đúng với code (422 khi kết quả phiên âm rỗng):
+
+- Đường Colab (PhoWhisper-large): nhiều khả năng trả rỗng nên ra 422, như lần đo trước (chưa kiểm chứng lại).
+- Đường local (PhoWhisper-small, chạy thử 2026-10-04 không bật Colab): model bịa ra chữ nên trả 200.
+
+Để xác nhận, bật Colab rồi chạy `python experiments/retest/flow_01_api_testcases.py --only TC-07`.
 
 ## Ghi Chú Thêm
 
