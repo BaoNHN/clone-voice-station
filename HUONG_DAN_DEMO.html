@@ -150,6 +150,7 @@
       <li><a href="#ngrok">6. Demo công khai qua ngrok</a></li>
       <li><a href="#loi">7. Xử lý lỗi thường gặp</a></li>
       <li><a href="#danhgia">8. Đo chất lượng giọng nói (đánh giá luận văn)</a></li>
+      <li><a href="#retest">9. Chạy lại các test case</a></li>
     </ul>
   </nav>
 
@@ -343,6 +344,22 @@ python tools\eval_stt_wer.py path\to\testset\ --language vi --out wer.csv</code>
       <li>File báo <code>NO-RVC</code> là do Colab offline lúc sinh nên <code>/api/speak</code> trả TTS thường — script loại khỏi trung bình; bật lại Colab rồi sinh lại đúng những file đó.</li>
       <li>Chỉ cần SNR thì chạy bằng Python thường, không cần venv: <code>python tools\eval_voice_quality.py --system rvc_out\</code></li>
     </ul>
+
+    <h2 id="retest">9. Chạy lại các test case (retest flows)</h2>
+    <p>Bộ luồng ở <code>clone-voice-station/experiments/retest/</code>, mỗi luồng tái hiện một nhóm test của luận văn; kết quả ghi vào <code>experiments/retest/logs/</code> (<code>.json</code> + <code>.md</code>). Không sửa code đã nộp.</p>
+    <table>
+      <tr><th>Luồng</th><th>Tái hiện</th><th>Lệnh</th></tr>
+      <tr><td><code>flow_01_api_testcases.py</code></td><td>Table 5: TC-01…TC-19</td><td><code>python experiments/retest/flow_01_api_testcases.py [--user-id U] [--only TC-05,TC-06]</code></td></tr>
+      <tr><td><code>flow_02_speaker_similarity.py</code></td><td>Mục 6.4.2: Resemblyzer mọi profile (82,2%)</td><td><code>python experiments/retest/flow_02_speaker_similarity.py</code></td></tr>
+      <tr><td><code>flow_03_latency.py</code></td><td>Mục 6.4.1 / Figure 6: độ trễ ba đường</td><td><code>python experiments/retest/flow_03_latency.py --path colab-local</code> (hoặc <code>colab-ngrok --base-url URL</code>, <code>local</code>)</td></tr>
+      <tr><td><code>flow_04_legal_wer.py</code></td><td>Mục 6.4.3–6.4.4 / Figure 10: WER 30 câu pháp lý</td><td><code>python experiments/retest/flow_04_legal_wer.py --conditions remote,base,hotwords,medical,vlsp</code></td></tr>
+      <tr><td><code>flow_05_snr.py</code></td><td>Mục 6.5.1 / Table 11: SNR</td><td><code>python experiments/retest/flow_05_snr.py</code></td></tr>
+      <tr><td><code>run_all.py</code></td><td>Chạy lần lượt các luồng</td><td><code>python experiments/retest/run_all.py --only api,snr</code></td></tr>
+    </table>
+    <div class="box warn">
+      <strong class="label">Điều kiện</strong>
+      Station chạy ở <code>127.0.0.1:8090</code>; API key từ <code>--api-key</code>, <code>VOICE_STATION_API_KEY</code> hoặc <code>voice_station_key.txt</code>. TC-01/02/11 cần adapter đã publish / Colab sống, nếu không luồng ghi <code>SKIP</code> kèm lý do. TC-08/09 dùng fault injection trong tiến trình (<code>--no-inprocess</code> để bỏ qua). <code>flow_04</code> cần <code>pip install -e ../clone-voice-client[local]</code> và 10 hotword trong <code>hotwords_legal.json</code> (kiểm tra lại trước khi báo số).
+    </div>
 
     <footer>
       Chi tiết từng tính năng: xem <code>terminal.txt</code> trong từng thư mục project, và <code>HUONG_DAN_DEMO.md</code> của mỗi project (<code>HUONG_DAN_CHAY_TOAN_HE_THONG.md</code>, nguồn Markdown của trang này, nằm cùng thư mục).

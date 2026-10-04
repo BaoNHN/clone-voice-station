@@ -534,6 +534,21 @@ Bộ test là thư mục chứa từng cặp cùng tên: file audio + file `.txt
 
 ---
 
+## 12. Chạy Lại Các Test Case (Retest Flows)
+
+Bộ luồng nằm ở `experiments/retest/`, mỗi luồng tái hiện một nhóm test của luận văn và ghi kết quả vào `experiments/retest/logs/` (`.json` + `.md`). Không sửa code đã nộp.
+
+| Luồng | Tái hiện | Lệnh |
+|---|---|---|
+| `flow_01_api_testcases.py` | Table 5: TC-01…TC-19 (`/api/transcribe`, `/api/speak`) | `python experiments/retest/flow_01_api_testcases.py [--user-id U] [--only TC-05,TC-06]` |
+| `flow_02_speaker_similarity.py` | Mục 6.4.2: Resemblyzer trên mọi profile (82,2%) | `python experiments/retest/flow_02_speaker_similarity.py` |
+| `flow_03_latency.py` | Mục 6.4.1 / Figure 6: độ trễ ba đường | `python experiments/retest/flow_03_latency.py --path colab-local` (hoặc `colab-ngrok --base-url <url>`, `local`) |
+| `flow_04_legal_wer.py` | Mục 6.4.3–6.4.4 / Figure 10: WER 30 câu pháp lý | `python experiments/retest/flow_04_legal_wer.py --conditions remote,base,hotwords,medical,vlsp` |
+| `flow_05_snr.py` | Mục 6.5.1 / Table 11: SNR | `python experiments/retest/flow_05_snr.py` |
+| `run_all.py` | Chạy lần lượt các luồng trên | `python experiments/retest/run_all.py --only api,snr` |
+
+Điều kiện: station chạy ở `127.0.0.1:8090`, API key lấy từ `--api-key`, `VOICE_STATION_API_KEY` hoặc `voice_station_key.txt`. TC-01/02/11 cần adapter đã publish / Colab sống, nếu không luồng ghi `SKIP` kèm lý do (không ghi PASS giả). TC-08/09 dùng fault injection trong tiến trình (`--no-inprocess` để bỏ qua). `flow_04` cần `pip install -e ../clone-voice-client[local]` và danh sách 10 hotword trong `hotwords_legal.json` (kiểm tra lại trước khi báo số).
+
 ## Ghi Chú Thêm
 
 - Dữ liệu của mỗi client **tách biệt hoàn toàn** — client A không bao giờ thấy tên/giọng nói/thông báo của client B, kể cả qua API lẫn dashboard's cột Client (chỉ hiển thị cho manager, không lộ ra API của client khác).

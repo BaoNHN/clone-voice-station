@@ -27,3 +27,4 @@ __pycache__/
 /tools/legal_testset/*.m4a
 /tools/legal_testset/*.wav
 /tools/legal_testset/**/*.wav
+/experiments/retest/logs/
