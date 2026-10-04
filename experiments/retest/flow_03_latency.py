@@ -64,7 +64,7 @@ def main():
         def tts(q):
             return lambda: c.speak(q, uid, profile_id)
 
-            cold_asr, _, e1 = timed(asr(clips[0]))
+        cold_asr, _, e1 = timed(asr(clips[0]))
         cold_tts, _, e2 = timed(tts(questions[0]))
         rep.add("cold-asr", "INFO", "first call after start", f"{cold_asr:.2f}s", str(e1 or ""))
         rep.add("cold-tts", "INFO", "first call after start", f"{cold_tts:.2f}s", str(e2 or ""))

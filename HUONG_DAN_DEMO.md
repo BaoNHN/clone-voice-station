@@ -395,6 +395,10 @@ Manager có thể chuyển bất kỳ giọng nào sang `failed` bất cứ lúc
 
 ---
 
+### Colab: `/convert` không tìm thấy model sau khi runtime bị reset
+
+Model đã huấn luyện nằm trên Drive (`/content/drive/MyDrive/rvc_training/models/<speaker_id>.pth`) nhưng không còn trong `/content/RVC/assets/weights`. Chạy cell **P** của `colab/voice_server.ipynb` (đặt ngay trước cell K) sau khi sửa biến `sp` thành `speaker_id` cần khôi phục (VD `client1_userrvc-test-user-001_profile11`). Cell chép file `.pth` về `assets/weights`; cần chạy lại sau mỗi lần reset runtime.
+
 ### Huấn luyện giọng nói mãi không xong (`training` không chuyển `ready`)
 
 **Kiểm tra:**
@@ -548,6 +552,8 @@ Bộ luồng nằm ở `experiments/retest/`, mỗi luồng tái hiện một nh
 | `run_all.py` | Chạy lần lượt các luồng trên | `python experiments/retest/run_all.py --only api,snr` |
 
 Điều kiện: station chạy ở `127.0.0.1:8090`, API key lấy từ `--api-key`, `VOICE_STATION_API_KEY` hoặc `voice_station_key.txt`. TC-01/02/11 cần adapter đã publish / Colab sống, nếu không luồng ghi `SKIP` kèm lý do (không ghi PASS giả). TC-08/09 dùng fault injection trong tiến trình (`--no-inprocess` để bỏ qua). `flow_04` cần `pip install -e ../clone-voice-client[local]` và danh sách 10 hotword trong `hotwords_legal.json` (kiểm tra lại trước khi báo số).
+
+Lưu ý khi chạy thử (2026-10-04, không bật Colab): `flow_02` cần Python của `rag_env` (`D:\anaconda3\envs\rag_env\python.exe`) vì mẫu `.webm` chỉ đọc được ở môi trường đó; `flow_04` tự đặt `KMP_DUPLICATE_LIB_OK`. Kết quả: `flow_04` base 41,6% / hotwords 38,0% / y khoa 52,2% / VLSP 41,4%; `flow_02` 84,3 / 80,4 / 80,9% (TB 81,9%, 16 cặp); `flow_05` khớp Table 11. TC-07 (âm thanh im lặng) trả 200 thay vì 422 khi chạy đường local PhoWhisper-small.
 
 ## Ghi Chú Thêm
 

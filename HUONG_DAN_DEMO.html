@@ -299,6 +299,9 @@ python start_ngrok.py</code></pre>
     <h3>Cửa sổ Clone Voice Station đóng ngay</h3>
     <p>Mở lại bằng tay (mục 4) để đọc lỗi trực tiếp thay vì qua start_all.bat.</p>
 
+    <h3>Colab: /convert không tìm thấy model sau khi runtime bị reset</h3>
+    <p>Model đã huấn luyện nằm trên Drive (<code>/content/drive/MyDrive/rvc_training/models/&lt;speaker_id&gt;.pth</code>) nhưng không còn trong <code>/content/RVC/assets/weights</code>. Chạy cell <strong>P</strong> của <code>colab/voice_server.ipynb</code> (đặt ngay trước cell K) sau khi sửa biến <code>sp</code> thành <code>speaker_id</code> cần khôi phục (VD <code>client1_userrvc-test-user-001_profile11</code>). Cell chép file <code>.pth</code> về <code>assets/weights</code>; cần chạy lại sau mỗi lần reset runtime.</p>
+
     <h3>Kiểm tra rvc_endpoint đang trỏ đúng chưa</h3>
     <pre><code>cd /d D:\hoc\project\clone-voice-station
 python -c "from database.database import get_setting; print(get_setting('rvc_endpoint'))"</code></pre>
@@ -359,6 +362,11 @@ python tools\eval_stt_wer.py path\to\testset\ --language vi --out wer.csv</code>
     <div class="box warn">
       <strong class="label">Điều kiện</strong>
       Station chạy ở <code>127.0.0.1:8090</code>; API key từ <code>--api-key</code>, <code>VOICE_STATION_API_KEY</code> hoặc <code>voice_station_key.txt</code>. TC-01/02/11 cần adapter đã publish / Colab sống, nếu không luồng ghi <code>SKIP</code> kèm lý do. TC-08/09 dùng fault injection trong tiến trình (<code>--no-inprocess</code> để bỏ qua). <code>flow_04</code> cần <code>pip install -e ../clone-voice-client[local]</code> và 10 hotword trong <code>hotwords_legal.json</code> (kiểm tra lại trước khi báo số).
+    </div>
+
+    <div class="box ok">
+      <strong class="label">Lưu ý khi chạy thử (2026-10-04, không bật Colab)</strong>
+      <code>flow_02</code> cần Python của <code>rag_env</code> (<code>D:\anaconda3\envs\rag_env\python.exe</code>) vì mẫu <code>.webm</code> chỉ đọc được ở môi trường đó; <code>flow_04</code> tự đặt <code>KMP_DUPLICATE_LIB_OK</code>. Kết quả: <code>flow_04</code> base 41,6% / hotwords 38,0% / y khoa 52,2% / VLSP 41,4%; <code>flow_02</code> 84,3 / 80,4 / 80,9% (TB 81,9%, 16 cặp); <code>flow_05</code> khớp Table 11. TC-07 (âm thanh im lặng) trả 200 thay vì 422 khi chạy đường local PhoWhisper-small.
     </div>
 
     <footer>

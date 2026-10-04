@@ -12,6 +12,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("CLONE_VOICE_LOCAL_MODEL", "tiny")   # must precede local_stt import
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")      # avoids duplicate OpenMP abort on Windows
 from common import HERE, PROJECT_DIR, Report, add_common_args, corpus_wer, load_set30, make_client
 
 PACK_DIR = os.path.join(PROJECT_DIR, "voice-lab-example", "stt_pack")
